@@ -266,9 +266,18 @@ class CarController(CarControllerBase):
              # Send idle pedal keepalive to prevent firmware fault
              # Tinkla PCC_module.py line 132: sends reset at frame % 50 (2Hz)
              # ============================================
-             if use_pedal and pedal_responding:
-               idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if tinkla_conf else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
-               can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
+             if use_pedal:
+               if pedal_responding:
+                 # Pedal is alive — send idle keepalive at 50Hz (every frame %2)
+                 idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if tinkla_conf else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
+                 can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
+               elif self.frame % 100 == 0:
+                 # Pedal not responding — send disabled reset at 1Hz to wake it up.
+                 # Low rate avoids flooding a dead bus (can_tx_check_min_slots_free
+                 # blocks ALL buses if any one queue fills).  Tinkla uses 2Hz here
+                 # (frame%50) but 1Hz is safer for dead-bus tolerance.
+                 idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if tinkla_conf else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
+                 can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
              # Reset state when not active
              self.prev_pedal_di = 0.0
 
