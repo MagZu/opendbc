@@ -219,7 +219,7 @@ class CarController(CarControllerBase):
         if self.frame % 2 == 0:
            self.prev_enable_long_control = cs_enable_long
 
-           if long_active and pedal_long_allowed and pedal_responding:
+           if long_active and pedal_long_allowed:
              # ============================================
              # Mode 1: Comma Pedal Control
              # Matches Tinkla Pre-AP behavior: always send commands when
@@ -254,7 +254,7 @@ class CarController(CarControllerBase):
               can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
               self.prev_pedal_di = 0.0
 
-           elif use_pedal and not pedal_transform_valid and pedal_responding:
+           elif use_pedal and not pedal_transform_valid:
              # Safety gate: block pedal actuation when pedal transform is invalid.
              idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if tinkla_conf else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
              can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
