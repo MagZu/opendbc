@@ -42,6 +42,11 @@ static int tesla_gear = 4;  // Initialize to Drive (4) to avoid false disables o
 static int tesla_gear_prev = 4;  // Track previous gear for edge detection
 static bool tesla_doors_open = false;
 
+// Radar emulation state
+static int tesla_radar_status = 0;          // 0=unknown, 1=init(0x631), 2=active(0x300)
+static uint32_t tesla_last_radar_signal = 0;
+#define TESLA_RADAR_TIMEOUT 10000000U       // 10 seconds in microseconds
+
 static uint8_t tesla_legacy_compute_checksum(const CANPacket_t *to_push) {
   int addr = GET_ADDR(to_push);
   int len = GET_LEN(to_push);
@@ -52,7 +57,6 @@ static uint8_t tesla_legacy_compute_checksum(const CANPacket_t *to_push) {
   return checksum;
 }
 
-/*
 static uint8_t tesla_legacy_compute_crc(uint32_t MLB, uint32_t MHB, int msg_len) {
   static const int crc_lookup[256] = { 0x00, 0x1D, 0x3A, 0x27, 0x74, 0x69, 0x4E, 0x53, 0xE8, 0xF5, 0xD2, 0xCF, 0x9C, 0x81, 0xA6, 0xBB, 
     0xCD, 0xD0, 0xF7, 0xEA, 0xB9, 0xA4, 0x83, 0x9E, 0x25, 0x38, 0x1F, 0x02, 0x51, 0x4C, 0x6B, 0x76, 
@@ -83,7 +87,26 @@ static uint8_t tesla_legacy_compute_crc(uint32_t MLB, uint32_t MHB, int msg_len)
   crc = crc ^ 0xFF;
   return crc;
 }
-*/
+
+// Helper: copy data verbatim, re-address, send to bus 1
+static void tesla_radar_readdr(const CANPacket_t *src, uint16_t new_addr) {
+#if defined(STM32H7) || defined(STM32F4)
+  CANPacket_t pkt;
+  pkt.returned = 0U;
+  pkt.rejected = 0U;
+  pkt.extended = src->extended;
+  pkt.bus = 1;
+  pkt.addr = new_addr;
+  pkt.data_len_code = src->data_len_code;
+  for (int i = 0; i < GET_LEN(src); i++) {
+    pkt.data[i] = src->data[i];
+  }
+  can_send(&pkt, 1, true);
+#else
+  (void)src;
+  (void)new_addr;
+#endif
+}
 
 // Handles manual forwarding modification since safety hooks don't allow modification
 static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
@@ -91,50 +114,160 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
   int addr = GET_ADDR(to_fwd);
 
   if (bus_num == 0 && tesla_preap && tesla_radar_emulation) {
-    // Radar forwarding 0 -> 1 (only when radar emulation is enabled).
-    // Without this gate, ~102 msg/s are sent to dead bus 1 with no ACK device,
-    // causing txBufferOverflow that starves ALL bus TX via can_tx_check_min_slots_free.
-    // Matches tinkla's do_radar_emulation gating.
-    if (addr == 0x398) { // GTW_carConfig
-        CANPacket_t to_send;
-        to_send.returned = 0U;
-        to_send.rejected = 0U;
-        to_send.extended = to_fwd->extended;
-        to_send.bus = 1; // Radar
-        to_send.data_len_code = to_fwd->data_len_code;
-        uint32_t RDLR = GET_BYTES_04(to_fwd);
-        uint32_t RDHR = GET_BYTES_48(to_fwd);
-        
-        RDLR = (RDLR & 0xFFFFF33F) | 0x100 | 0x440;
-        RDHR = (RDHR & 0xCFFF0F0F) | 0x10000000 | (radar_position << 4) | (radar_epas_type << 12);
-        
-        to_send.addr = 0x2A9;
-        WORD_TO_BYTE_ARRAY(&to_send.data[4], RDHR);
-        WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
-        to_send.data[7] = tesla_legacy_compute_checksum(&to_send);
+    // Radar forwarding CAN0 -> CAN1 (full GTW emulation).
+    // Intercept chassis messages and forward to radar bus with re-addressed CAN IDs.
+    // Without this, the Bosch radar has no vehicle speed, steering angle, or brake data.
+
+    // Group A: Simple re-addresses (copy data verbatim, change CAN ID)
+    switch (addr) {
+      case 0x45:   tesla_radar_readdr(to_fwd, 0x219); break;  // STW_ACTN_RQ -> stalk
+      case 0x108:  tesla_radar_readdr(to_fwd, 0x109); break;  // DI_torque1
+      case 0x145:  tesla_radar_readdr(to_fwd, 0x149); break;  // ESP_145h
+      case 0x20A:  tesla_radar_readdr(to_fwd, 0x159); break;  // BrakeMessage -> ESP_C
+      case 0x308:  tesla_radar_readdr(to_fwd, 0x209); break;  // GTW_odo
+      case 0x30A:  tesla_radar_readdr(to_fwd, 0x2D9); break;  // BC_status
+      case 0x405:  tesla_radar_readdr(to_fwd, 0x2B9); break;  // VIP_405HS
+      default: break;
+    }
+
+    // Group B: Modified data forwards
+
+    if (addr == 0x398) { // GTW_carConfig -> 0x2A9
+      CANPacket_t to_send;
+      to_send.returned = 0U;
+      to_send.rejected = 0U;
+      to_send.extended = to_fwd->extended;
+      to_send.bus = 1;
+      to_send.data_len_code = to_fwd->data_len_code;
+      uint32_t RDLR = GET_BYTES_04(to_fwd);
+      uint32_t RDHR = GET_BYTES_48(to_fwd);
+
+      RDLR = (RDLR & 0xFFFFF33F) | 0x100 | 0x440;
+      RDHR = (RDHR & 0xCFFF0F0F) | 0x10000000 | (radar_position << 4) | (radar_epas_type << 12);
+
+      to_send.addr = 0x2A9;
+      WORD_TO_BYTE_ARRAY(&to_send.data[4], RDHR);
+      WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
+      to_send.data[7] = tesla_legacy_compute_checksum(&to_send);
 #if defined(STM32H7) || defined(STM32F4)
-        can_send(&to_send, 1, true);
+      can_send(&to_send, 1, true);
 #endif
     }
-    
-    if (addr == 0x118) { // DI_torque2
-       // Forward as 0x169 to radar
-       CANPacket_t to_send;
-        to_send.returned = 0U;
-        to_send.rejected = 0U;
-        to_send.extended = to_fwd->extended;
-        to_send.bus = 1;
-        to_send.data_len_code = to_fwd->data_len_code;
-        uint32_t RDLR = GET_BYTES_04(to_fwd);
-        uint32_t RDHR = GET_BYTES_48(to_fwd);
-        
-        to_send.addr = 0x169;
-        WORD_TO_BYTE_ARRAY(&to_send.data[4], RDHR);
-        WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
-        to_send.data[7] = tesla_legacy_compute_checksum(&to_send);
+
+    if (addr == 0x0E) { // STW_ANGLHP_STAT -> 0x199
+      CANPacket_t to_send;
+      to_send.returned = 0U;
+      to_send.rejected = 0U;
+      to_send.extended = to_fwd->extended;
+      to_send.bus = 1;
+      to_send.data_len_code = to_fwd->data_len_code;
+      uint32_t RDLR = GET_BYTES_04(to_fwd);
+      uint32_t RDHR = GET_BYTES_48(to_fwd);
+
+      to_send.addr = 0x199;
+      // Check if angular speed is SNA (0x3FFF)
+      if (((RDLR >> 16) & 0xFF3F) == 0xFF3F) {
+        // Replace with zero angular change
+        RDLR = (RDLR & 0x00C0FFFF) | (0x0020 << 16);
+        // Remove CRC and sensor ID, force DELPHI (0x04)
+        RDHR = (RDHR & 0x00FFFFF0) | 0x00000004;
+        // Recompute CRC8 into byte 7
+        int crc = tesla_legacy_compute_crc(RDLR, RDHR, 7);
+        RDHR = RDHR | ((uint32_t)crc << 24);
+      }
+      WORD_TO_BYTE_ARRAY(&to_send.data[4], RDHR);
+      WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
 #if defined(STM32H7) || defined(STM32F4)
-        can_send(&to_send, 1, true);
+      can_send(&to_send, 1, true);
 #endif
+    }
+
+    // Group C: Synthetic message generation
+
+    if (addr == 0x115) { // ESP_115h -> 0x129 + synthetic 0x1A9
+      // Simple re-address 0x115 -> 0x129
+      tesla_radar_readdr(to_fwd, 0x129);
+
+      // Build synthetic DI_espControl (0x1A9), 5 bytes
+      uint32_t RDHR_src = GET_BYTES_48(to_fwd);
+      int counter = ((RDHR_src & 0xF0) >> 4) & 0x0F;
+      uint32_t syn_RDLR = 0x000C0000U | ((uint32_t)counter << 28);
+      int cksm = (0x38 + 0x0C + (counter << 4)) & 0xFF;
+      uint32_t syn_RDHR = (uint32_t)cksm;
+
+      CANPacket_t to_send;
+      to_send.returned = 0U;
+      to_send.rejected = 0U;
+      to_send.extended = 0;
+      to_send.bus = 1;
+      to_send.addr = 0x1A9;
+      to_send.data_len_code = 5;  // 5 bytes -> DLC 5
+      WORD_TO_BYTE_ARRAY(&to_send.data[0], syn_RDLR);
+      WORD_TO_BYTE_ARRAY(&to_send.data[4], syn_RDHR);
+#if defined(STM32H7) || defined(STM32F4)
+      can_send(&to_send, 1, true);
+#endif
+    }
+
+    if (addr == 0x118) { // DI_torque2 -> 0x119 + synthetic 0x169
+      // Simple re-address 0x118 -> 0x119
+      tesla_radar_readdr(to_fwd, 0x119);
+
+      // Build synthetic ESP_wheelSpeeds (0x169), 8 bytes
+      uint32_t RDLR = GET_BYTES_04(to_fwd);
+      int ws_counter = GET_BYTES_48(to_fwd) & 0x0F;
+
+      // Extract DI_vehicleSpeed from bits [27:16]
+      int raw_speed = (int)((0xFFF0000U & RDLR) >> 16);
+
+      int speed;
+      if (raw_speed == 0xFFF) {
+        speed = 0x1FFF;  // SNA
+      } else {
+        // Convert MPH -> KPH using integer math, then encode (÷ 0.04)
+        // raw * 0.05 - 25 = MPH; * 1.609 = KPH; / 0.04 encodes
+        int mph_x100 = raw_speed * 5 - 2500;
+        int kph_x100 = mph_x100 * 1609 / 1000;
+        if (kph_x100 < 0) {
+          kph_x100 = 0;
+        }
+        speed = (kph_x100 / 4) & 0x1FFF;
+      }
+
+      // Pack 4 identical 13-bit wheel speeds
+      uint32_t ws_RDLR = (uint32_t)(speed | (speed << 13) | (speed << 26));
+      uint32_t ws_RDHR = (uint32_t)((speed >> 6) | (speed << 7) | (ws_counter << 20)) & 0x00FFFFFFU;
+
+      // Checksum: base 0x76, sum bytes 0-6, place in byte 7
+      int ws_cksm = 0x76;
+      ws_cksm = (ws_cksm + (int)(ws_RDLR & 0xFF) + (int)((ws_RDLR >> 8) & 0xFF) + (int)((ws_RDLR >> 16) & 0xFF) + (int)((ws_RDLR >> 24) & 0xFF)) & 0xFF;
+      ws_cksm = (ws_cksm + (int)(ws_RDHR & 0xFF) + (int)((ws_RDHR >> 8) & 0xFF) + (int)((ws_RDHR >> 16) & 0xFF)) & 0xFF;
+      ws_RDHR = ws_RDHR | ((uint32_t)ws_cksm << 24);
+
+      CANPacket_t to_send;
+      to_send.returned = 0U;
+      to_send.rejected = 0U;
+      to_send.extended = 0;
+      to_send.bus = 1;
+      to_send.addr = 0x169;
+      to_send.data_len_code = 8;  // 8 bytes -> DLC 8
+      WORD_TO_BYTE_ARRAY(&to_send.data[0], ws_RDLR);
+      WORD_TO_BYTE_ARRAY(&to_send.data[4], ws_RDHR);
+#if defined(STM32H7) || defined(STM32F4)
+      can_send(&to_send, 1, true);
+#endif
+    }
+  }
+
+  // Radar status tracking (CAN1 -> informational only)
+  if (bus_num == 1 && tesla_preap && tesla_radar_emulation) {
+    if (addr == 0x631 && tesla_radar_status == 0) {
+      tesla_radar_status = 1;  // init
+      tesla_last_radar_signal = microsecond_timer_get();
+    }
+    if (addr == 0x300 && tesla_radar_status == 1) {
+      tesla_radar_status = 2;  // active
+      tesla_last_radar_signal = microsecond_timer_get();
     }
   }
 
@@ -469,6 +602,8 @@ static safety_config tesla_legacy_init(uint16_t param) {
   tesla_doors_open = false;
   pedal_can = -1;
   pedal_pressed = 0;
+  tesla_radar_status = 0;
+  tesla_last_radar_signal = 0;
 
   // Set DAS control message address
   das_control_msg = tesla_external_panda ? 0x2bfU : 0x2b9U;

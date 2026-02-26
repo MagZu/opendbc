@@ -1,7 +1,6 @@
 import numpy as np
 from opendbc.can import CANPacker
 from opendbc.car import Bus
-from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.lateral import apply_steer_angle_limits_vm
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.carlog import carlog
@@ -32,9 +31,11 @@ try:
 except ImportError:
   CRUISE_BUTTONS_AVAILABLE = False
 
-# Zero-torque learning thresholds (from Tinkla PCC_module.py)
-TORQUE_LEVEL_ACC = 0.0
-TORQUE_LEVEL_DECEL = -30.0
+# Pedal rate limiter: max DI change per 20ms step (pedal sends at 50 Hz).
+# Prevents WOT-on-engage: even with kf=1.0 feedforward, the physical pedal
+# ramps over ~0.3-0.6s instead of jumping instantly.
+# 2.5 DI/step = 125 DI/s.  P85+ at highway (max=75 DI): 0→full in 0.6s.
+PEDAL_RAMP_RATE = 2.5
 
 # Fallback pedal constants (used when tinkla_conf unavailable)
 # From Tinkla tunes.py
@@ -70,12 +71,9 @@ class CarController(CarControllerBase):
     # Pedal Control State (Tinkla PCC_module port)
     # ============================================
     self.prev_pedal_di = 0.0      # Previous pedal value in DI units
-    self.pedal_for_zero_torque = 0.0  # Learned zero-torque pedal position
-    self.last_torque_for_zero = TORQUE_LEVEL_DECEL
-    self.last_apid_for_zero = 0.0
-    self.prev_a_pid = 0.0
     self.prev_v_ego = 0.0         # Previous vehicle speed
     
+
     # State tracking
     self.prev_enable_long_control = False
     self.prev_requested_long = False
@@ -154,6 +152,7 @@ class CarController(CarControllerBase):
         pedal_long_allowed = bool(use_pedal and pedal_transform_valid)
         if long_active and not self.prev_preap_long_active:
           self.preap_long_engage_frame = self.frame
+          self.prev_pedal_di = 0.0  # Rate limiter starts from zero on fresh engage
 
         # ==============================================
         # Pedal Over CC: one-shot CANCEL to keep stock CC unlatch
@@ -234,7 +233,6 @@ class CarController(CarControllerBase):
               else:
                 accel_request = float(actuators.accel)
                 target_speed_kph = float(getattr(CS, "pedal_speed_kph", 0.0))
-                self._update_zero_torque_learning(CS, CS.out.vEgo, accel_request)
                 pedal_cmd = self._calc_pedal_command(accel_request, CS.out.vEgo, target_speed_kph)
                 can_sends.append(self.tesla_can.create_pedal_command(pedal_cmd, enable=1))
 
@@ -314,67 +312,56 @@ class CarController(CarControllerBase):
 
   def _calc_pedal_command(self, accel_request: float, v_ego: float, target_speed_kph: float | None = None) -> float:
     """
-    Calculate pedal command from acceleration request.
+    Convert acceleration request (m/s^2) to comma pedal voltage.
 
-    Simple linear mapping from accel (m/s^2) to DI pedal units, then through the
-    Tinkla calibration transform to pedal voltage. Trim profiles (P85+/P85/S85/S60)
-    are applied as a speed-dependent max-pedal clamp. Zero-torque learning provides
-    the coast point at speed.
+    Architecture (FrogPilot/OPGM Bolt-inspired, feedforward-dominant):
+      1. Linear map: accel -> DI pedal units via [regen_decel, 0, ACCEL_MAX]
+      2. Clamp to trim profile max (P85+/P85/S85/S60 speed-dependent)
+      3. Rate limiter: ±PEDAL_RAMP_RATE DI/step (WOT-on-engage defense)
+      4. Calibration transform: DI -> pedal voltage
 
-    With the modern accel-error PI (kp=0, ki=speed-dep, implicit kf=1.0),
-    actuators.accel already contains a_target + integral correction. This mapping
-    just converts that accel to pedal position — no additional smoothing or rate
-    limiting needed (the PI loop handles stability).
-
-    See PEDAL_ANALYSIS.md for full rationale.
+    With kf=1.0, actuators.accel ≈ a_target + slow_integral_trim.
+    The MPC plan is jerk-constrained and smooth; the rate limiter catches
+    any remaining transients (engage edges, planner mode switches).
     """
     if not TINKLA_AVAILABLE or not tinkla_conf:
       # Fallback: simple linear mapping if tinkla_conf unavailable
       pedal_di = float(clip(interp(accel_request, [-1.5, 0., 2.0], [-5., 0., 100.]), -5, 100))
+      pedal_di = float(clip(pedal_di,
+                            self.prev_pedal_di - PEDAL_RAMP_RATE,
+                            self.prev_pedal_di + PEDAL_RAMP_RATE))
+      self.prev_pedal_di = pedal_di
       return _transform_di_to_pedal(pedal_di)
 
     # Trim-specific max pedal (P85+, P85, S85, S60, Generic)
     pedal_profile = tinkla_conf.get_pedal_profile_values()
     max_pedal_value = float(interp(v_ego, PEDAL_BP, pedal_profile))
 
-    # Speed-dependent regen limit (less regen at low speed)
-    regen_decel = float(interp(v_ego, [10., 20.], [-0.8, -1.45]))
-
-    # Zero-torque pedal position (learned at speed, default at low speed)
-    zero_accel = self.pedal_for_zero_torque if v_ego >= 5.0 * 0.44704 else 0.0
+    # Speed-dependent regen limit (more regen available at higher speeds)
+    regen_decel = float(interp(v_ego, [5., 15.], [-1.2, -1.45]))
 
     # Linear mapping: accel (m/s^2) -> DI pedal units
+    # With kf=1.0 feedforward, accel_request ≈ a_target + integral_trim,
+    # so this mapping smoothly covers the full regen-to-accel range.
     accel_bp = [regen_decel, 0.0, ACCEL_MAX]
-    accel_v = [PEDAL_DI_MIN, zero_accel, max_pedal_value]
+    accel_v = [PEDAL_DI_MIN, 0.0, max_pedal_value]
     pedal_di = float(interp(accel_request, accel_bp, accel_v))
 
     # Clamp to trim profile limits
     pedal_di = float(clip(pedal_di, PEDAL_DI_MIN, max_pedal_value))
 
+    # Rate limiter: cap DI change per step to prevent sudden jumps.
+    # Primary WOT-on-engage defense — even with kf=1.0, pedal ramps smoothly.
+    pedal_di = float(clip(pedal_di,
+                          self.prev_pedal_di - PEDAL_RAMP_RATE,
+                          self.prev_pedal_di + PEDAL_RAMP_RATE))
+
     # Transform DI -> pedal voltage via calibration
     pedal_cmd = tinkla_conf.di_to_pedal(pedal_di)
 
-    # Save state for zero-torque learning
     self.prev_pedal_di = pedal_di
     self.prev_v_ego = v_ego
 
     return pedal_cmd
 
-  def _update_zero_torque_learning(self, CS, v_ego: float, accel_request: float) -> None:
-    """
-    Learn pedal value that corresponds to near-zero drive torque at speed.
-    Matches Tinkla PCC zero-torque learning behavior.
-    """
-    torque_level = float(getattr(CS, "torqueLevel", 0.0))
-    if (
-      torque_level < TORQUE_LEVEL_ACC
-      and torque_level > TORQUE_LEVEL_DECEL
-      and v_ego >= 10.0 * CV.MPH_TO_MS
-      and abs(torque_level) < abs(self.last_torque_for_zero)
-    ):
-      self.pedal_for_zero_torque = self.prev_pedal_di
-      self.last_torque_for_zero = torque_level
-      self.last_apid_for_zero = self.prev_a_pid
-
-    self.prev_a_pid = accel_request
 
