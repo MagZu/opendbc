@@ -22,17 +22,19 @@ except ImportError:
 
 # Pre-AP pedal accel envelopes, mapped to openpilot Driving Personality toggle.
 # Breakpoints are speed in m/s; values are max accel in m/s².
-# Uses Tinkla's PEDAL profiles (not AP profiles) — pedal cars need a gentle
-# start at standstill (0.3 m/s²) since the comma pedal directly controls
-# the throttle motor. AP profiles (2.0+ at standstill) cause hard launches.
-#   aggressive(0) → between Tinkla MadMax and Standard
-#   standard(1)   → Tinkla Standard
-#   relaxed(2)    → Tinkla Chill
+# Based on Tinkla Pedal profiles but reduced for feedforward architecture:
+# Tinkla uses PID which naturally dampens the ramp to the ceiling; our kf=1.0
+# feedforward passes MPC targets straight through, so the ceilings must be
+# lower to get the same feel.
+#   aggressive(0) → spirited but controlled
+#   standard(1)   → smooth daily driver
+#   relaxed(2)    → gentle, minimal push
 ACCEL_PREAP_BP = [0.0, 1.3, 7.5, 15.0, 25.0, 40.0]  # m/s
+#                  0    3    17    33    56    90  mph
 ACCEL_PREAP_PROFILES = {
-  0: [0.3, 1.25, 1.55, 1.25, 1.0, 0.8],  # aggressive: midpoint MadMax/Standard
-  1: [0.3, 0.9, 1.2, 1.0, 0.8, 0.6],     # standard: Tinkla Pedal Standard
-  2: [0.3, 0.7, 0.9, 0.7, 0.6, 0.5],     # relaxed: Tinkla Pedal Chill
+  0: [0.3, 0.8, 1.1, 1.0, 0.85, 0.7],   # aggressive
+  1: [0.3, 0.6, 0.9, 0.8, 0.7, 0.55],   # standard
+  2: [0.3, 0.45, 0.65, 0.55, 0.5, 0.4],  # relaxed
 }
 
 # Feedforward-dominant longitudinal tune (FrogPilot/OPGM Bolt-inspired).
