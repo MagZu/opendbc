@@ -101,6 +101,7 @@ static void tesla_radar_readdr(const CANPacket_t *src, uint16_t new_addr) {
   for (int i = 0; i < GET_LEN(src); i++) {
     pkt.data[i] = src->data[i];
   }
+  can_set_checksum(&pkt);
   can_send(&pkt, 1, true);
 #else
   (void)src;
@@ -150,6 +151,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
       WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
       to_send.data[7] = tesla_legacy_compute_checksum(&to_send);
 #if defined(STM32H7) || defined(STM32F4)
+      can_set_checksum(&to_send);
       can_send(&to_send, 1, true);
 #endif
     }
@@ -178,6 +180,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
       WORD_TO_BYTE_ARRAY(&to_send.data[4], RDHR);
       WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
 #if defined(STM32H7) || defined(STM32F4)
+      can_set_checksum(&to_send);
       can_send(&to_send, 1, true);
 #endif
     }
@@ -205,6 +208,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
       WORD_TO_BYTE_ARRAY(&to_send.data[0], syn_RDLR);
       WORD_TO_BYTE_ARRAY(&to_send.data[4], syn_RDHR);
 #if defined(STM32H7) || defined(STM32F4)
+      can_set_checksum(&to_send);
       can_send(&to_send, 1, true);
 #endif
     }
@@ -254,6 +258,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
       WORD_TO_BYTE_ARRAY(&to_send.data[0], ws_RDLR);
       WORD_TO_BYTE_ARRAY(&to_send.data[4], ws_RDHR);
 #if defined(STM32H7) || defined(STM32F4)
+      can_set_checksum(&to_send);
       can_send(&to_send, 1, true);
 #endif
     }
@@ -296,6 +301,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
         WORD_TO_BYTE_ARRAY(&to_send.data[4], RDHR);
         WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
 #if defined(STM32H7) || defined(STM32F4)
+        can_set_checksum(&to_send);
         can_send(&to_send, 0, true);
 #endif
     }
@@ -688,6 +694,16 @@ static safety_config tesla_legacy_init(uint16_t param) {
     {.msg = {{0x368, 0, 8, 10U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // DI_state (10Hz)
     {.msg = {{0x318, 0, 8, 10U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // GTW_carState (10Hz)
     {.msg = {{0x45, 0, 8, 10U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},    // STW_ACTN_RQ - Stalk (10Hz)
+    // GTW emulation source messages (forwarded from bus 0 -> bus 1 for Bosch radar).
+    // Low frequency (1Hz) for liveness — these are for forwarding only, not safety-critical.
+    // Actual bus rates are higher, but a permissive threshold avoids false controls_allowed drops.
+    {.msg = {{0x0E, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},    // STW_ANGLHP_STAT -> 0x199
+    {.msg = {{0x115, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // ESP_115h -> 0x129 + 0x1A9
+    {.msg = {{0x145, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // ESP_145h -> 0x149
+    {.msg = {{0x308, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // GTW_odo -> 0x209
+    {.msg = {{0x30A, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // BC_status -> 0x2D9
+    {.msg = {{0x398, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // GTW_carConfig -> 0x2A9
+    {.msg = {{0x405, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // VIP_405HS -> 0x2B9
   };
 
   // Determine configuration based on hardware type
