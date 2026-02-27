@@ -7,9 +7,10 @@
 #define GET_BYTES_48(msg) ((msg)->data[4] | ((msg)->data[5] << 8) | ((msg)->data[6] << 16) | ((msg)->data[7] << 24))
 #define WORD_TO_BYTE_ARRAY(dst8, src32) 0[dst8] = ((src32) & 0xFFU); 1[dst8] = (((src32) >> 8U) & 0xFFU); 2[dst8] = (((src32) >> 16U) & 0xFFU); 3[dst8] = (((src32) >> 24U) & 0xFFU)
 
-// Forward declaration
+// Forward declarations (these are defined in can_common.h, included after safety.h)
 #if defined(STM32H7) || defined(STM32F4)
 void can_send(CANPacket_t *to_push, uint8_t bus_number, bool skip_tx_hook);
+void can_set_checksum(CANPacket_t *packet);
 #endif
 
 static bool tesla_external_panda = false;
@@ -101,6 +102,7 @@ static void tesla_radar_readdr(const CANPacket_t *src, uint16_t new_addr) {
   for (int i = 0; i < GET_LEN(src); i++) {
     pkt.data[i] = src->data[i];
   }
+  can_set_checksum(&pkt);
   can_send(&pkt, 1, true);
 #else
   (void)src;
@@ -150,6 +152,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
       WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
       to_send.data[7] = tesla_legacy_compute_checksum(&to_send);
 #if defined(STM32H7) || defined(STM32F4)
+      can_set_checksum(&to_send);
       can_send(&to_send, 1, true);
 #endif
     }
@@ -178,6 +181,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
       WORD_TO_BYTE_ARRAY(&to_send.data[4], RDHR);
       WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
 #if defined(STM32H7) || defined(STM32F4)
+      can_set_checksum(&to_send);
       can_send(&to_send, 1, true);
 #endif
     }
@@ -205,6 +209,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
       WORD_TO_BYTE_ARRAY(&to_send.data[0], syn_RDLR);
       WORD_TO_BYTE_ARRAY(&to_send.data[4], syn_RDHR);
 #if defined(STM32H7) || defined(STM32F4)
+      can_set_checksum(&to_send);
       can_send(&to_send, 1, true);
 #endif
     }
@@ -254,6 +259,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
       WORD_TO_BYTE_ARRAY(&to_send.data[0], ws_RDLR);
       WORD_TO_BYTE_ARRAY(&to_send.data[4], ws_RDHR);
 #if defined(STM32H7) || defined(STM32F4)
+      can_set_checksum(&to_send);
       can_send(&to_send, 1, true);
 #endif
     }
@@ -271,18 +277,15 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
     }
   }
 
-  // Simple forwarding 2 -> 0
-  if (bus_num == 2) {
-    // We need to decide what to block/forward.
-    // Since we can't block selectively in fwd_hook (it blocks all or nothing per ID?), 
-    // manual forwarding is safer if we want filtering.
-    // But here we just want to pass everything relevant.
-    
+  // Simple forwarding 2 -> 0 (AP1/AP2 only, not Pre-AP)
+  // Pre-AP doesn't use bus 2 forwarding — this section was previously unreachable for
+  // Pre-AP because no bus 2 addresses were in tesla_preap_rx_checks[].
+  // With the rx_all hook seeing all traffic, we must explicitly skip Pre-AP.
+  if (bus_num == 2 && !tesla_preap) {
     bool forward = true;
-    // Filter logic:
     if (!tesla_external_panda && !tesla_hw1 && (addr == 0x27dU)) forward = false;
-    if (!tesla_external_panda && (addr == 0x488U) && !tesla_legacy_stock_lkas) forward = true; 
-    
+    if (!tesla_external_panda && (addr == 0x488U) && !tesla_legacy_stock_lkas) forward = true;
+
     if (forward) {
         CANPacket_t to_send;
         to_send.returned = 0U;
@@ -296,6 +299,7 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
         WORD_TO_BYTE_ARRAY(&to_send.data[4], RDHR);
         WORD_TO_BYTE_ARRAY(&to_send.data[0], RDLR);
 #if defined(STM32H7) || defined(STM32F4)
+        can_set_checksum(&to_send);
         can_send(&to_send, 0, true);
 #endif
     }
@@ -303,8 +307,8 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
 }
 
 static void tesla_legacy_rx_hook(const CANPacket_t *msg) {
-  // Handle forwarding (Manual injection)
-  tesla_legacy_handle_forwarding(msg);
+  // Forwarding is handled by rx_all hook (tesla_legacy_handle_forwarding)
+  // which sees ALL messages, not just whitelisted ones.
 
   // Steering angle: (0.1 * val) - 819.2 in deg.
   if (!tesla_external_panda && (msg->bus == 0U) && (msg->addr == 0x370U)) {
@@ -717,6 +721,7 @@ static safety_config tesla_legacy_init(uint16_t param) {
 const safety_hooks tesla_legacy_hooks = {
   .init = tesla_legacy_init,
   .rx = tesla_legacy_rx_hook,
+  .rx_all = tesla_legacy_handle_forwarding,  // sees ALL messages for GTW emulation
   .tx = tesla_legacy_tx_hook,
   .fwd = tesla_legacy_fwd_hook,
 };
