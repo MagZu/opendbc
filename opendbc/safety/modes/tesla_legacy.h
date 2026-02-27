@@ -310,8 +310,8 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
 }
 
 static void tesla_legacy_rx_hook(const CANPacket_t *msg) {
-  // Handle forwarding (Manual injection)
-  tesla_legacy_handle_forwarding(msg);
+  // Forwarding is handled by rx_all hook (tesla_legacy_handle_forwarding)
+  // which sees ALL messages, not just whitelisted ones.
 
   // Steering angle: (0.1 * val) - 819.2 in deg.
   if (!tesla_external_panda && (msg->bus == 0U) && (msg->addr == 0x370U)) {
@@ -695,16 +695,6 @@ static safety_config tesla_legacy_init(uint16_t param) {
     {.msg = {{0x368, 0, 8, 10U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // DI_state (10Hz)
     {.msg = {{0x318, 0, 8, 10U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // GTW_carState (10Hz)
     {.msg = {{0x45, 0, 8, 10U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},    // STW_ACTN_RQ - Stalk (10Hz)
-    // GTW emulation source messages (forwarded from bus 0 -> bus 1 for Bosch radar).
-    // Low frequency (1Hz) for liveness — these are for forwarding only, not safety-critical.
-    // Actual bus rates are higher, but a permissive threshold avoids false controls_allowed drops.
-    {.msg = {{0x0E, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},    // STW_ANGLHP_STAT -> 0x199
-    {.msg = {{0x115, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // ESP_115h -> 0x129 + 0x1A9
-    {.msg = {{0x145, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // ESP_145h -> 0x149
-    {.msg = {{0x308, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // GTW_odo -> 0x209
-    {.msg = {{0x30A, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // BC_status -> 0x2D9
-    {.msg = {{0x398, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // GTW_carConfig -> 0x2A9
-    {.msg = {{0x405, 0, 8, 1U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // VIP_405HS -> 0x2B9
   };
 
   // Determine configuration based on hardware type
@@ -734,6 +724,7 @@ static safety_config tesla_legacy_init(uint16_t param) {
 const safety_hooks tesla_legacy_hooks = {
   .init = tesla_legacy_init,
   .rx = tesla_legacy_rx_hook,
+  .rx_all = tesla_legacy_handle_forwarding,  // sees ALL messages for GTW emulation
   .tx = tesla_legacy_tx_hook,
   .fwd = tesla_legacy_fwd_hook,
 };
