@@ -337,8 +337,8 @@ class CarController(CarControllerBase):
     pedal_profile = tinkla_conf.get_pedal_profile_values()
     max_pedal_value = float(interp(v_ego, PEDAL_BP, pedal_profile))
 
-    # Speed-dependent regen limit (more regen available at higher speeds)
-    regen_decel = float(interp(v_ego, [5., 15.], [-1.2, -1.45]))
+    # Full regen available at all speeds (PID is already capped at -1.5 m/s²)
+    regen_decel = -1.5
 
     # Linear mapping: accel (m/s^2) -> DI pedal units
     # With kf=1.0 feedforward, accel_request ≈ a_target + integral_trim,

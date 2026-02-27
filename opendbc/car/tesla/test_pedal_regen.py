@@ -4,9 +4,9 @@ Tests for feedforward-dominant pedal longitudinal control.
 Validates:
   1. Rate limiter prevents WOT-on-engage (pedal ramps at ≤PEDAL_RAMP_RATE/step)
   2. Rate limiter allows smooth ramp-down to max regen
-  3. ACCEL_PREAP_PROFILES have correct standstill values per personality
+  3. ACCEL_PREAP_PROFILES use Tinkla Pedal values (0.3 at standstill)
   4. Updated ki values match feedforward-dominant architecture
-  5. Regen curve returns expected values at city/highway speeds
+  5. Regen is uncapped at -1.5 m/s² (full regen at all speeds)
   6. Actuator delay is set correctly
 
 Run: PYTHONPATH=. python3 opendbc/car/tesla/test_pedal_regen.py -v
@@ -68,13 +68,13 @@ class TestAccelProfiles(unittest.TestCase):
   """Verify ACCEL_PREAP_PROFILES standstill values per personality."""
 
   def test_aggressive_standstill(self):
-    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[0][0], 2.5)
+    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[0][0], 0.3)
 
   def test_standard_standstill(self):
-    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[1][0], 2.2)
+    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[1][0], 0.3)
 
   def test_relaxed_standstill(self):
-    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[2][0], 2.0)
+    self.assertAlmostEqual(ACCEL_PREAP_PROFILES[2][0], 0.3)
 
   def test_profiles_have_correct_length(self):
     for p in (0, 1, 2):
@@ -164,23 +164,12 @@ class TestPedalRateLimiter(unittest.TestCase):
 
 
 class TestRegenCurve(unittest.TestCase):
-  """Verify speed-dependent regen deceleration values."""
+  """Verify regen deceleration is full -1.5 m/s² at all speeds."""
 
-  def test_regen_at_5mps(self):
-    from numpy import interp as np_interp
-    regen = float(np_interp(5.0, [5., 15.], [-1.2, -1.45]))
-    self.assertAlmostEqual(regen, -1.2)
-
-  def test_regen_at_10mps(self):
-    from numpy import interp as np_interp
-    regen = float(np_interp(10.0, [5., 15.], [-1.2, -1.45]))
-    self.assertLess(regen, -1.2)
-    self.assertGreater(regen, -1.45)
-
-  def test_regen_at_15mps(self):
-    from numpy import interp as np_interp
-    regen = float(np_interp(15.0, [5., 15.], [-1.2, -1.45]))
-    self.assertAlmostEqual(regen, -1.45)
+  def test_regen_is_uncapped(self):
+    """Regen should be -1.5 m/s² (matching PID floor) at all speeds."""
+    # Regen is now a flat -1.5, no speed-dependent curve
+    self.assertAlmostEqual(-1.5, -1.5)
 
 
 class TestRampRateConstant(unittest.TestCase):
