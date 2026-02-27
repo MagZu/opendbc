@@ -277,18 +277,15 @@ static void tesla_legacy_handle_forwarding(const CANPacket_t *to_fwd) {
     }
   }
 
-  // Simple forwarding 2 -> 0
-  if (bus_num == 2) {
-    // We need to decide what to block/forward.
-    // Since we can't block selectively in fwd_hook (it blocks all or nothing per ID?), 
-    // manual forwarding is safer if we want filtering.
-    // But here we just want to pass everything relevant.
-    
+  // Simple forwarding 2 -> 0 (AP1/AP2 only, not Pre-AP)
+  // Pre-AP doesn't use bus 2 forwarding — this section was previously unreachable for
+  // Pre-AP because no bus 2 addresses were in tesla_preap_rx_checks[].
+  // With the rx_all hook seeing all traffic, we must explicitly skip Pre-AP.
+  if (bus_num == 2 && !tesla_preap) {
     bool forward = true;
-    // Filter logic:
     if (!tesla_external_panda && !tesla_hw1 && (addr == 0x27dU)) forward = false;
-    if (!tesla_external_panda && (addr == 0x488U) && !tesla_legacy_stock_lkas) forward = true; 
-    
+    if (!tesla_external_panda && (addr == 0x488U) && !tesla_legacy_stock_lkas) forward = true;
+
     if (forward) {
         CANPacket_t to_send;
         to_send.returned = 0U;
