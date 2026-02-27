@@ -7,6 +7,13 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.carlog import carlog
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR, TeslaLegacyParams, LEGACY_CARS, CruiseButtons, STALK_DOUBLE_PULL_MS
+from opendbc.car.tesla.nap_params import NAPParamKeys
+
+try:
+  from openpilot.common.params import Params as _NAPParams
+  _nap_params = _NAPParams()
+except ImportError:
+  _nap_params = None
 
 # Import Tinkla configuration (dynamic params)
 try:
@@ -78,6 +85,9 @@ class CarState(CarStateBase):
     self.preap_cc_cancel_needed = False   # carcontroller sends 0x45 CANCEL
     self.preap_cc_engage_needed = False   # carcontroller sends 0x45 RES_ACCEL
     self.preap_last_cc_spoof_ms = 0       # echo filter timestamp
+
+    # Follow distance stalk tracking
+    self.prev_stalk_follow = 0
 
     # Software-managed target speed (Tinkla PCC_module port)
     # Pre-AP has no stock cruise, so we manage the target speed ourselves.
@@ -374,6 +384,16 @@ class CarState(CarStateBase):
       self.cruise_buttons = int(cp_chassis.vl["STW_ACTN_RQ"]["SpdCtrlLvr_Stat"])
       # Save full STW_ACTN_RQ message for spoofing cancel commands (Tinkla carstate.py line 432)
       self.msg_stw_actn_req = copy.copy(cp_chassis.vl["STW_ACTN_RQ"])
+
+      # Read follow distance dial from cruise stalk
+      if _nap_params is not None:
+        dtr_dist = int(cp_chassis.vl["STW_ACTN_RQ"]["DTR_Dist_Rq"])
+        if dtr_dist != 255:  # 255 = SNA (no stalk input)
+          stalk_follow = min((dtr_dist // 33) + 1, 7)
+          if stalk_follow != self.prev_stalk_follow:
+            _nap_params.put(NAPParamKeys.FOLLOW_DISTANCE, stalk_follow)
+            self.prev_stalk_follow = stalk_follow
+
       curr_time_ms = _current_time_millis()
       use_pedal = bool(tinkla_conf.use_pedal) if (TINKLA_CONF_AVAILABLE and tinkla_conf is not None) else False
       pedal_factor = float(tinkla_conf.pedal_factor) if (TINKLA_CONF_AVAILABLE and tinkla_conf is not None) else 1.0

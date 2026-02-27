@@ -37,7 +37,7 @@ class NAPParamKeys:
 # Default values matching params_keys.h declarations
 DEFAULTS = {
   NAPParamKeys.PEDAL_ENABLED: False,
-  NAPParamKeys.FOLLOW_DISTANCE: 2,
+  NAPParamKeys.FOLLOW_DISTANCE: 4,
   NAPParamKeys.PEDAL_PROFILE: 4,
   NAPParamKeys.PEDAL_CAN_BUS: 2,
   NAPParamKeys.PEDAL_CALIB_DONE: False,
