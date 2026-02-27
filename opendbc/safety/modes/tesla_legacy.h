@@ -7,9 +7,10 @@
 #define GET_BYTES_48(msg) ((msg)->data[4] | ((msg)->data[5] << 8) | ((msg)->data[6] << 16) | ((msg)->data[7] << 24))
 #define WORD_TO_BYTE_ARRAY(dst8, src32) 0[dst8] = ((src32) & 0xFFU); 1[dst8] = (((src32) >> 8U) & 0xFFU); 2[dst8] = (((src32) >> 16U) & 0xFFU); 3[dst8] = (((src32) >> 24U) & 0xFFU)
 
-// Forward declaration
+// Forward declarations (these are defined in can_common.h, included after safety.h)
 #if defined(STM32H7) || defined(STM32F4)
 void can_send(CANPacket_t *to_push, uint8_t bus_number, bool skip_tx_hook);
+void can_set_checksum(CANPacket_t *packet);
 #endif
 
 static bool tesla_external_panda = false;
