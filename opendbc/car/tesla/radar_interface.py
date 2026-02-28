@@ -62,9 +62,10 @@ class RadarInterface(RadarInterfaceBase):
     values = self.rcp.update(can_msgs)
     self.updated_messages.update(values)
 
-    ret = structs.RadarData()
     if self.trigger_msg not in self.updated_messages:
-      return ret
+      return None
+
+    ret = structs.RadarData()
 
     if self.rcp is None:
       return ret
