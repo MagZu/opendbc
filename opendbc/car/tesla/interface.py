@@ -149,9 +149,10 @@ class CarInterface(CarInterfaceBase):
           ret.longitudinalTuning.kf = 1.0
         except AttributeError:
           pass  # kf field not available in device capnp schema
-        # Actuator delay: comma pedal CAN + drivetrain response.  Matches tinkla
-        # (0.5s) and FrogPilot GM pedal (0.5s).  Planner looks 0.55s ahead.
-        ret.longitudinalActuatorDelay = 0.5
+        # Actuator delay: comma pedal CAN + drivetrain response.
+        # Real chain ~250-350ms (CAN→pedal→inverter→drivetrain).
+        # 0.5s was too high — MPC over-predicted, making the car feel sluggish.
+        ret.longitudinalActuatorDelay = 0.3
       else:
         ret.longitudinalTuning.kpBP = [0.0]
         ret.longitudinalTuning.kpV = [0.0]
