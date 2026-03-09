@@ -8,16 +8,15 @@ from opendbc.car.interfaces import CarStateBase
 from opendbc.car.carlog import carlog
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR, TeslaLegacyParams, LEGACY_CARS, CruiseButtons
 from opendbc.car.tesla.nap_params import NAPParamKeys
-from opendbc.car.tesla.tinkla_conf import tinkla_conf, PEDAL_DI_PRESSED
+from opendbc.car.tesla.tinkla_conf import tinkla_conf
 from opendbc.car.tesla.preap.engagement import PreAPEngagement
+from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
 
 try:
   from openpilot.common.params import Params as _NAPParams
   _nap_params = _NAPParams()
 except ImportError:
   _nap_params = None
-
-PEDAL_TIMEOUT_MS = 500
 
 def _current_time_millis():
   return int(round(time.time() * 1000))
@@ -76,16 +75,11 @@ class CarState(CarStateBase):
     self.preap_cc_cancel_needed = False
     self.preap_cc_engage_needed = False
 
-    # Comma Pedal state
+    # Comma Pedal feedback parser
+    self.pedal = PedalFeedback()
+    # Bridge attributes for carcontroller reads via getattr(CS, ...)
     self.pedal_interceptor_value = 0.0
-    self.pedal_interceptor_value2 = 0.0
-    self.pedal_interceptor_state = 0
-    self.pedal_idx = 0
-    self.prev_pedal_idx = 0
-    self.last_pedal_seen_ms = 0
-    self.pedal_available = False
     self.pedal_timeout = True
-    self.torqueLevel = 0.0
 
     # Alert event set by carcontroller (pedalMaxRegen), read by carstate
     self.pccEvent = None
@@ -377,49 +371,18 @@ class CarState(CarStateBase):
     # ============================================
     if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
       curr_time_ms = _current_time_millis()
-      
-      # Parse pedal feedback from GAS_SENSOR.
-      # For Pre-AP, this is decoded from tesla_preap.dbc and already scaled.
-      try:
-        gas_sensor = cp_ap_party.vl.get("GAS_SENSOR", {})
-        if gas_sensor:
-          # Store previous idx for edge detection
-          self.prev_pedal_idx = self.pedal_idx
-          
-          # Read pedal sensor values
-          # From DBC: INTERCEPTOR_GAS, INTERCEPTOR_GAS2, STATE, IDX
-          interceptor_gas = float(gas_sensor.get("INTERCEPTOR_GAS", 0.0))
-          interceptor_gas2 = float(gas_sensor.get("INTERCEPTOR_GAS2", 0.0))
-          self.pedal_interceptor_state = int(gas_sensor.get("STATE", 0))
-          self.pedal_idx = int(gas_sensor.get("IDX", 0))
-          
-          # Match Tinkla semantics: convert decoded pedal value to DI units.
-          # Do NOT apply M1/M2 scaling here; DBC decoding already did that.
-          self.pedal_interceptor_value = float(tinkla_conf.pedal_to_di(interceptor_gas))
-          self.pedal_interceptor_value2 = float(tinkla_conf.pedal_to_di(interceptor_gas2))
-          
-          # Track pedal responsiveness
-          if self.pedal_idx != self.prev_pedal_idx:
-            self.last_pedal_seen_ms = curr_time_ms
-          
-          # Check pedal timeout (500ms without message)
-          self.pedal_timeout = (curr_time_ms - self.last_pedal_seen_ms) > PEDAL_TIMEOUT_MS
-          self.pedal_available = (not self.pedal_timeout) and (self.pedal_interceptor_state == 0)
-      except Exception:
-        # Pedal not present or parsing failed
-        self.pedal_available = False
-        self.pedal_timeout = True
+      gas_sensor = cp_ap_party.vl.get("GAS_SENSOR", {})
+      self.pedal.update(gas_sensor, curr_time_ms)
+      self.pedal.update_torque(cp_pt.vl.get("DI_torque1", {}))
+
+      # Bridge pedal state for carcontroller reads
+      self.pedal_interceptor_value = self.pedal.interceptor_value
+      self.pedal_timeout = self.pedal.timeout
 
       # In pedal mode, use interceptor threshold for gas override semantics.
-      # This matches Tinkla behavior and avoids sticky DI_pedalPos > 0 overrides.
+      # Matches Tinkla behavior: avoids sticky DI_pedalPos > 0 overrides.
       if tinkla_conf.use_pedal:
-        ret.gasPressed = self.pedal_interceptor_value > PEDAL_DI_PRESSED
-      
-      # Read torque level for pedal zero learning (from DI_torque1)
-      try:
-        self.torqueLevel = cp_pt.vl["DI_torque1"].get("DI_torqueMotor", 0)
-      except Exception:
-        self.torqueLevel = 0.0
+        ret.gasPressed = self.pedal.gas_pressed
 
     # Messages needed by carcontroller
     if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
