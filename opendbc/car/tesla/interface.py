@@ -6,12 +6,11 @@ from opendbc.car.tesla.carcontroller import CarController
 from opendbc.car.tesla.carstate import CarState
 from opendbc.car.tesla.values import TeslaSafetyFlags, CAR, TeslaLegacyParams, LEGACY_CARS, CruiseButtons
 from opendbc.car.tesla.radar_interface import RadarInterface
-
-# Import config helper - may fail on non-comma devices during testing
-try:
-  from opendbc.car.tesla.tinkla_conf import tinkla_conf
-except ImportError:
-  tinkla_conf = None
+from opendbc.car.tesla.tinkla_conf import tinkla_conf
+from opendbc.car.tesla.preap.constants import (
+  ACCEL_PREAP_BP, ACCEL_PREAP_PROFILES,
+  PEDAL_LONG_K_BP, PEDAL_LONG_KP_V, PEDAL_LONG_KI_V,
+)
 
 # Read openpilot Params for personality toggle (may fail outside device)
 try:
@@ -19,33 +18,6 @@ try:
   _params = _Params()
 except ImportError:
   _params = None
-
-# Pre-AP pedal accel envelopes, mapped to openpilot Driving Personality toggle.
-# Breakpoints are speed in m/s; values are max accel in m/s².
-# Based on Tinkla Pedal profiles but reduced for feedforward architecture:
-# Tinkla uses PID which naturally dampens the ramp to the ceiling; our kf=1.0
-# feedforward passes MPC targets straight through, so the ceilings must be
-# lower to get the same feel.
-#   aggressive(0) → spirited but controlled
-#   standard(1)   → smooth daily driver
-#   relaxed(2)    → gentle, minimal push
-ACCEL_PREAP_BP = [0.0, 1.3, 7.5, 15.0, 25.0, 40.0]  # m/s
-#                  0    3    17    33    56    90  mph
-ACCEL_PREAP_PROFILES = {
-  0: [0.3, 0.8, 1.1, 1.0, 0.85, 0.7],   # aggressive
-  1: [0.3, 0.6, 0.9, 0.8, 0.7, 0.55],   # standard
-  2: [0.3, 0.45, 0.65, 0.55, 0.5, 0.4],  # relaxed
-}
-
-# Feedforward-dominant longitudinal tune (FrogPilot/OPGM Bolt-inspired).
-# kp=0: no proportional term — eliminates aEgo sensor noise amplification.
-# kf=1.0: full a_target passthrough — the MPC plan (jerk-constrained, smooth)
-#   is the dominant control signal.
-# ki low: slow integral trim handles steady-state offset (hills, wind, regen).
-#   Lower than FP Bolt (0.125-0.33) because our kf=1.0 vs their kf=0.25.
-PEDAL_LONG_K_BP = [0.0, 3.0, 6.0, 35.0]
-PEDAL_LONG_KP_V = [0.0, 0.0, 0.0, 0.0]
-PEDAL_LONG_KI_V = [0.05, 0.08, 0.10, 0.15]
 
 
 class CarInterface(CarInterfaceBase):
@@ -110,13 +82,12 @@ class CarInterface(CarInterfaceBase):
     if candidate == CAR.TESLA_MODEL_S_PREAP:
       flags = TeslaSafetyFlags.FLAG_PREAP | TeslaSafetyFlags.LONG_CONTROL
 
-      # Read configuration (with safe fallbacks if config unavailable)
-      use_pedal = tinkla_conf.use_pedal if tinkla_conf else False
-      radar_enabled = tinkla_conf.radar_enabled if tinkla_conf else False
-      radar_behind_nosecone = tinkla_conf.radar_behind_nosecone if tinkla_conf else False
-      print(f"[NAP] interface.py fingerprint: tinkla_conf={'present' if tinkla_conf else 'None'}, "
-            f"use_pedal={use_pedal}, radar_enabled={radar_enabled}, "
-            f"radar_behind_nosecone={radar_behind_nosecone}, radarUnavailable={not radar_enabled}")
+      use_pedal = tinkla_conf.use_pedal
+      radar_enabled = tinkla_conf.radar_enabled
+      radar_behind_nosecone = tinkla_conf.radar_behind_nosecone
+      print(f"[NAP] interface.py fingerprint: use_pedal={use_pedal}, "
+            f"radar_enabled={radar_enabled}, radar_behind_nosecone={radar_behind_nosecone}, "
+            f"radarUnavailable={not radar_enabled}")
 
       if use_pedal:
         flags |= TeslaSafetyFlags.FLAG_ENABLE_PEDAL

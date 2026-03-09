@@ -6,48 +6,10 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.carlog import carlog
 from opendbc.car.tesla.teslacan import TeslaCAN
 from opendbc.car.tesla.teslacan_legacy import TeslaCANRaven, TeslaCANPreAP
-from opendbc.car.tesla.values import CarControllerParams, CANBUS, LEGACY_CARS, CAR
+from opendbc.car.tesla.values import CarControllerParams, CANBUS, LEGACY_CARS, CAR, CruiseButtons
 from opendbc.car.vehicle_model import VehicleModel
-from numpy import interp, clip
-
-# Import Tinkla config and pedal constants
-try:
-  from opendbc.car.tesla.tinkla_conf import (
-    tinkla_conf,
-    PEDAL_DI_MIN, PEDAL_DI_ZERO, PEDAL_DI_PRESSED,
-    PEDAL_BP, PEDAL_V_DEFAULT,
-    ACCEL_MAX,
-  )
-  TINKLA_AVAILABLE = True
-except ImportError:
-  TINKLA_AVAILABLE = False
-  tinkla_conf = None
-  PEDAL_DI_PRESSED = 2  # Fallback default
-
-# Import CruiseButtons for cruise spam fallback
-try:
-  from opendbc.car.tesla.values import CruiseButtons
-  CRUISE_BUTTONS_AVAILABLE = True
-except ImportError:
-  CRUISE_BUTTONS_AVAILABLE = False
-
-# Pedal rate limiter: max DI change per 20ms step (pedal sends at 50 Hz).
-# Prevents WOT-on-engage: even with kf=1.0 feedforward, the physical pedal
-# ramps over ~0.3-0.6s instead of jumping instantly.
-# 2.5 DI/step = 125 DI/s.  P85+ at highway (max=75 DI): 0→full in 0.6s.
-PEDAL_RAMP_RATE = 2.5
-
-# Fallback pedal constants (used when tinkla_conf unavailable)
-# From Tinkla tunes.py
-PEDAL_DI_MIN_DEFAULT = -5
-PEDAL_DI_ZERO_DEFAULT = 0
-PEDAL_CALIB_FACTOR_DEFAULT = 1.0
-PEDAL_CALIB_ZERO_DEFAULT = 0.0
-PEDAL_ZERO_DEFAULT = PEDAL_CALIB_ZERO_DEFAULT - 1.0 / PEDAL_CALIB_FACTOR_DEFAULT  # = -1.0
-
-def _transform_di_to_pedal(val):
-  """Default DI→pedal transform when tinkla_conf unavailable. Matches Tinkla tunes.py."""
-  return PEDAL_ZERO_DEFAULT + (val - PEDAL_DI_ZERO_DEFAULT) / PEDAL_CALIB_FACTOR_DEFAULT
+from opendbc.car.tesla.tinkla_conf import tinkla_conf, PEDAL_DI_MIN, PEDAL_DI_ZERO
+from opendbc.car.tesla.pedal.controller import compute_pedal_command, PEDAL_RAMP_RATE
 
 
 def get_safety_CP():
@@ -67,12 +29,8 @@ class CarController(CarControllerBase):
     # Vehicle model used for lateral limiting
     self.VM = VehicleModel(get_safety_CP())
     
-    # ============================================
-    # Pedal Control State (Tinkla PCC_module port)
-    # ============================================
-    self.prev_pedal_di = 0.0      # Previous pedal value in DI units
-    self.prev_v_ego = 0.0         # Previous vehicle speed
-    
+    # Pedal rate limiter state (DI units, passed to compute_pedal_command)
+    self.prev_pedal_di = 0.0
 
     # State tracking
     self.prev_enable_long_control = False
@@ -94,11 +52,7 @@ class CarController(CarControllerBase):
         self.pedal_packer = CANPacker("comma_pedal")
         self.tesla_can = TeslaCANPreAP(self.packers, self.pedal_packer)
         
-        # Configure pedal CAN bus from tinkla_conf
-        if TINKLA_AVAILABLE and tinkla_conf:
-          self.tesla_can.pedal_can_bus = tinkla_conf.pedal_can_bus
-        else:
-          self.tesla_can.pedal_can_bus = 2  # Default to bus 2
+        self.tesla_can.pedal_can_bus = tinkla_conf.pedal_can_bus
       else:
         self.tesla_can = TeslaCANRaven(self.packers)
         
@@ -146,8 +100,8 @@ class CarController(CarControllerBase):
         cs_enable_long = getattr(CS, 'enableLongControl', False)
         requested_long = cs_cruise_enabled and cs_enable_long
         long_active = requested_long and CC.longActive
-        use_pedal = TINKLA_AVAILABLE and tinkla_conf and tinkla_conf.use_pedal
-        pedal_factor = float(tinkla_conf.pedal_factor) if (TINKLA_AVAILABLE and tinkla_conf) else 1.0
+        use_pedal = tinkla_conf.use_pedal
+        pedal_factor = float(tinkla_conf.pedal_factor)
         pedal_transform_valid = bool(np.isfinite(pedal_factor) and abs(pedal_factor) > 1e-6)
         pedal_long_allowed = bool(use_pedal and pedal_transform_valid)
         if long_active and not self.prev_preap_long_active:
@@ -169,18 +123,17 @@ class CarController(CarControllerBase):
           if self.prev_requested_long and (not requested_long) and CS.out.cruiseState.enabled:
             self.preap_cancel_pending = True
 
-          if CRUISE_BUTTONS_AVAILABLE:
-            cruise_buttons = getattr(CS, "cruise_buttons", CruiseButtons.IDLE)
-            prev_cruise_buttons = getattr(CS, "prev_cruise_buttons", CruiseButtons.IDLE)
-            stalk_press_edge = cruise_buttons != prev_cruise_buttons and cruise_buttons != CruiseButtons.IDLE
-            if stalk_press_edge:
-              pedal_over_cc_button = (
-                cruise_buttons == CruiseButtons.MAIN
-                or CruiseButtons.is_accel(cruise_buttons)
-                or CruiseButtons.is_decel(cruise_buttons)
-              )
-              if pedal_over_cc_button and requested_long and CS.out.cruiseState.enabled:
-                self.preap_cancel_pending = True
+          cruise_buttons = getattr(CS, "cruise_buttons", CruiseButtons.IDLE)
+          prev_cruise_buttons = getattr(CS, "prev_cruise_buttons", CruiseButtons.IDLE)
+          stalk_press_edge = cruise_buttons != prev_cruise_buttons and cruise_buttons != CruiseButtons.IDLE
+          if stalk_press_edge:
+            pedal_over_cc_button = (
+              cruise_buttons == CruiseButtons.MAIN
+              or CruiseButtons.is_accel(cruise_buttons)
+              or CruiseButtons.is_decel(cruise_buttons)
+            )
+            if pedal_over_cc_button and requested_long and CS.out.cruiseState.enabled:
+              self.preap_cancel_pending = True
 
         if self.preap_cancel_pending and self.frame % 10 == 0:
           msg_stw = getattr(CS, 'msg_stw_actn_req', None)
@@ -233,13 +186,14 @@ class CarController(CarControllerBase):
               else:
                 accel_request = float(actuators.accel)
                 target_speed_kph = float(getattr(CS, "pedal_speed_kph", 0.0))
-                pedal_cmd = self._calc_pedal_command(accel_request, CS.out.vEgo, target_speed_kph)
+                pedal_cmd, self.prev_pedal_di = compute_pedal_command(
+                  accel_request, CS.out.vEgo, self.prev_pedal_di, target_speed_kph)
                 can_sends.append(self.tesla_can.create_pedal_command(pedal_cmd, enable=1))
 
                 # Max regen warning: alert driver when pedal is at/near max regen
                 # (they need to use the brake pedal for more deceleration).
                 # Tinkla PCC_module.py line 353: trigger at 95% of PEDAL_DI_MIN, suppress for 2s after engage.
-                pedal_di_min = PEDAL_DI_MIN if TINKLA_AVAILABLE else PEDAL_DI_MIN_DEFAULT
+                pedal_di_min = PEDAL_DI_MIN
                 engage_elapsed = (self.frame - self.preap_long_engage_frame) * 0.01  # frames to seconds at 100Hz
                 if self.prev_pedal_di <= 0.95 * pedal_di_min and engage_elapsed > 2.0:
                   CS.pccEvent = "pedalMaxRegen"
@@ -248,13 +202,13 @@ class CarController(CarControllerBase):
             except Exception:
               # Fail-safe: on any unexpected pedal path exception, send disabled pedal.
               carlog.exception("Pre-AP pedal command path failed; sending disabled pedal command")
-              idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if tinkla_conf else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
+              idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
               can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
               self.prev_pedal_di = 0.0
 
            elif use_pedal and not pedal_transform_valid:
              # Safety gate: block pedal actuation when pedal transform is invalid.
-             idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if tinkla_conf else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
+             idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
              can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
              self.prev_pedal_di = 0.0
 
@@ -267,14 +221,14 @@ class CarController(CarControllerBase):
              if use_pedal:
                if pedal_responding:
                  # Pedal is alive — send idle keepalive at 50Hz (every frame %2)
-                 idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if tinkla_conf else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
+                 idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
                  can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
                elif self.frame % 100 == 0:
                  # Pedal not responding — send disabled reset at 1Hz to wake it up.
                  # Low rate avoids flooding a dead bus (can_tx_check_min_slots_free
                  # blocks ALL buses if any one queue fills).  Tinkla uses 2Hz here
                  # (frame%50) but 1Hz is safer for dead-bus tolerance.
-                 idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if tinkla_conf else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
+                 idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
                  can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
              # Reset state when not active
              self.prev_pedal_di = 0.0
@@ -293,7 +247,7 @@ class CarController(CarControllerBase):
       if CC.cruiseControl.cancel:
         if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
            if not getattr(CS, 'pedal_timeout', True):
-             idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO) if (TINKLA_AVAILABLE and tinkla_conf) else _transform_di_to_pedal(PEDAL_DI_ZERO_DEFAULT)
+             idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
              can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
         else:
            cntr = (CS.das_control["DAS_controlCounter"] + 1) % 8
@@ -305,63 +259,5 @@ class CarController(CarControllerBase):
 
     self.frame += 1
     return new_actuators, can_sends
-
-  # ============================================
-  # Pedal Control Logic (Ported from Tinkla PCC_module.py)
-  # ============================================
-
-  def _calc_pedal_command(self, accel_request: float, v_ego: float, target_speed_kph: float | None = None) -> float:
-    """
-    Convert acceleration request (m/s^2) to comma pedal voltage.
-
-    Architecture (FrogPilot/OPGM Bolt-inspired, feedforward-dominant):
-      1. Linear map: accel -> DI pedal units via [regen_decel, 0, ACCEL_MAX]
-      2. Clamp to trim profile max (P85+/P85/S85/S60 speed-dependent)
-      3. Rate limiter: ±PEDAL_RAMP_RATE DI/step (WOT-on-engage defense)
-      4. Calibration transform: DI -> pedal voltage
-
-    With kf=1.0, actuators.accel ≈ a_target + slow_integral_trim.
-    The MPC plan is jerk-constrained and smooth; the rate limiter catches
-    any remaining transients (engage edges, planner mode switches).
-    """
-    if not TINKLA_AVAILABLE or not tinkla_conf:
-      # Fallback: simple linear mapping if tinkla_conf unavailable
-      pedal_di = float(clip(interp(accel_request, [-1.5, 0., 2.0], [-5., 0., 100.]), -5, 100))
-      pedal_di = float(clip(pedal_di,
-                            self.prev_pedal_di - PEDAL_RAMP_RATE,
-                            self.prev_pedal_di + PEDAL_RAMP_RATE))
-      self.prev_pedal_di = pedal_di
-      return _transform_di_to_pedal(pedal_di)
-
-    # Trim-specific max pedal (P85+, P85, S85, S60, Generic)
-    pedal_profile = tinkla_conf.get_pedal_profile_values()
-    max_pedal_value = float(interp(v_ego, PEDAL_BP, pedal_profile))
-
-    # Full regen available at all speeds (PID is already capped at -1.5 m/s²)
-    regen_decel = -1.5
-
-    # Linear mapping: accel (m/s^2) -> DI pedal units
-    # With kf=1.0 feedforward, accel_request ≈ a_target + integral_trim,
-    # so this mapping smoothly covers the full regen-to-accel range.
-    accel_bp = [regen_decel, 0.0, ACCEL_MAX]
-    accel_v = [PEDAL_DI_MIN, 0.0, max_pedal_value]
-    pedal_di = float(interp(accel_request, accel_bp, accel_v))
-
-    # Clamp to trim profile limits
-    pedal_di = float(clip(pedal_di, PEDAL_DI_MIN, max_pedal_value))
-
-    # Rate limiter: cap DI change per step to prevent sudden jumps.
-    # Primary WOT-on-engage defense — even with kf=1.0, pedal ramps smoothly.
-    pedal_di = float(clip(pedal_di,
-                          self.prev_pedal_di - PEDAL_RAMP_RATE,
-                          self.prev_pedal_di + PEDAL_RAMP_RATE))
-
-    # Transform DI -> pedal voltage via calibration
-    pedal_cmd = tinkla_conf.di_to_pedal(pedal_di)
-
-    self.prev_pedal_di = pedal_di
-    self.prev_v_ego = v_ego
-
-    return pedal_cmd
 
 

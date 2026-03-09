@@ -6,8 +6,10 @@ from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.carlog import carlog
-from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR, TeslaLegacyParams, LEGACY_CARS, CruiseButtons, STALK_DOUBLE_PULL_MS
+from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR, TeslaLegacyParams, LEGACY_CARS, CruiseButtons
 from opendbc.car.tesla.nap_params import NAPParamKeys
+from opendbc.car.tesla.tinkla_conf import tinkla_conf, PEDAL_DI_PRESSED
+from opendbc.car.tesla.preap.engagement import PreAPEngagement
 
 try:
   from openpilot.common.params import Params as _NAPParams
@@ -15,19 +17,7 @@ try:
 except ImportError:
   _nap_params = None
 
-# Import Tinkla configuration (dynamic params)
-try:
-  from opendbc.car.tesla.tinkla_conf import tinkla_conf, PEDAL_DI_PRESSED
-  TINKLA_CONF_AVAILABLE = True
-except ImportError:
-  TINKLA_CONF_AVAILABLE = False
-  tinkla_conf = None
-  PEDAL_DI_PRESSED = 2  # Fallback threshold for "pedal pressed" detection
-
 PEDAL_TIMEOUT_MS = 500
-
-ButtonType = structs.CarState.ButtonEvent.Type
-
 
 def _current_time_millis():
   return int(round(time.time() * 1000))
@@ -66,65 +56,39 @@ class CarState(CarStateBase):
     self.das_control = None
     self.cruise_buttons = 0
     self.prev_cruise_buttons = 0
-    self.cruiseEnabled = False
     self.msg_stw_actn_req = None  # Full STW_ACTN_RQ message for spoofing cancel commands
-    self.last_stalk_non_cancel_ms = -10000  # Timestamp for MAIN/RES/DECEL press edge
-    
-    # Double-pull state machine (Tinkla-style engagement)
-    self.stalk_pull_time_ms = 0
-    self.prev_stalk_pull_time_ms = -1000  # Start negative to avoid false double-pull on first press
-    self.pending_enable = False  # True while waiting to see if double-pull happens
-    
-    # Engagement mode tracking
-    # - enableLongControl: True = full control (steering + longitudinal), False = steering only
-    # - enableJustCC: True = steering only mode (no longitudinal)
-    self.enableLongControl = False
-    self.enableJustCC = False
-    self.prev_steering_disengage = False
-    self.preap_brake_pressed_prev = False
-    self.preap_cc_cancel_needed = False   # carcontroller sends 0x45 CANCEL
-    self.preap_cc_engage_needed = False   # carcontroller sends 0x45 RES_ACCEL
-    self.preap_last_cc_spoof_ms = 0       # echo filter timestamp
 
     # Follow distance stalk tracking
     self.prev_stalk_follow = 0
-
-    # Software-managed target speed (Tinkla PCC_module port)
-    # Pre-AP has no stock cruise, so we manage the target speed ourselves.
-    # Set on double-pull, adjusted by stalk up/down, fed to cruiseState.speed.
-    self.pedal_speed_kph = 0.0
     self.speed_units = "MPH"  # Updated from DI_state each frame
-    
-    # ============================================
-    # Comma Pedal State (Tinkla PCC_module port)
-    # ============================================
-    self.pedal_interceptor_value = 0.0   # Pedal position in voltage units
-    self.pedal_interceptor_value2 = 0.0  # Redundant pedal value
-    self.pedal_interceptor_state = 0     # 0 = OK, 1 = error
-    self.pedal_idx = 0                   # Received counter
-    self.prev_pedal_idx = 0              # Previous counter for edge detection
-    self.last_pedal_seen_ms = 0          # Last time we got a pedal message
-    self.pedal_available = False         # True if pedal is responding
-    self.pedal_timeout = True            # True if pedal hasn't been seen recently
-    
-    # Torque level tracking (for pedal zero learning)
-    self.torqueLevel = 0.0
-    
-    # Read engagement settings from persistent config (or use defaults)
-    if TINKLA_CONF_AVAILABLE and tinkla_conf is not None:
-      self.enableDoublePull = tinkla_conf.double_pull_enabled
-      self.double_pull_window_ms = tinkla_conf.double_pull_window_ms
-    else:
-      self.enableDoublePull = True            # Default ON for Pre-AP
-      self.double_pull_window_ms = STALK_DOUBLE_PULL_MS  # Default 750ms (Tinkla)
 
-    # ============================================
-    # Alert Event (Tinkla-style)
-    # Set this to an event name string when state changes
-    # interface.py will read and add to events
-    # ============================================
-    self.longCtrlEvent = None  # "pccEnabled", "pccDisabled", etc.
-    self.pccEvent = None       # Secondary event slot
+    # Pre-AP engagement state machine (double-pull, button handling, brake override)
+    self.engagement = PreAPEngagement(
+      double_pull_enabled=tinkla_conf.double_pull_enabled,
+      double_pull_window_ms=tinkla_conf.double_pull_window_ms,
+    )
+    # Bridge attributes: carcontroller reads these via getattr(CS, 'X', default)
+    self.cruiseEnabled = False
+    self.enableLongControl = False
+    self.enableJustCC = False
+    self.pedal_speed_kph = 0.0
+    self.longCtrlEvent = None
+    self.preap_cc_cancel_needed = False
+    self.preap_cc_engage_needed = False
+
+    # Comma Pedal state
+    self.pedal_interceptor_value = 0.0
+    self.pedal_interceptor_value2 = 0.0
+    self.pedal_interceptor_state = 0
+    self.pedal_idx = 0
+    self.prev_pedal_idx = 0
+    self.last_pedal_seen_ms = 0
+    self.pedal_available = False
+    self.pedal_timeout = True
+    self.torqueLevel = 0.0
+
+    # Alert event set by carcontroller (pedalMaxRegen), read by carstate
+    self.pccEvent = None
 
   def update_autopark_state(self, autopark_state: str, cruise_enabled: bool):
     autopark_now = autopark_state in ("ACTIVE", "COMPLETE", "SELFPARK_STARTED")
@@ -280,21 +244,7 @@ class CarState(CarStateBase):
     ret.steeringDisengage = self.hands_on_level >= 3 or (eac_status == "EAC_INHIBITED" and
                                                           eac_error_code == "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY")
 
-    # Reset engagement state on steering disengage rising edge.
-    # This mirrors panda safety behavior (controls_allowed is dropped on the same edge)
-    # and guarantees the next engagement comes from a fresh stalk pull sequence.
-    if ret.steeringDisengage and not self.prev_steering_disengage:
-      was_long_active = self.enableLongControl
-      self.cruiseEnabled = False
-      self.enableLongControl = False
-      self.enableJustCC = False
-      self.pending_enable = False
-      self.pedal_speed_kph = 0.0
-      self.stalk_pull_time_ms = 0
-      self.prev_stalk_pull_time_ms = -1000
-      if was_long_active:
-        self.longCtrlEvent = "pccDisabled"
-    self.prev_steering_disengage = ret.steeringDisengage
+    self.engagement.handle_steering_disengage(ret.steeringDisengage)
 
     # Cruise state
     cruise_state = self.can_defines["DI_state"]["DI_cruiseState"].get(int(cp_chassis.vl["DI_state"]["DI_cruiseState"]), None)
@@ -315,8 +265,7 @@ class CarState(CarStateBase):
       self.speed_units = speed_units
 
     if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      _use_pedal = bool(tinkla_conf.use_pedal) if (TINKLA_CONF_AVAILABLE and tinkla_conf is not None) else False
-      if self.enableLongControl and _use_pedal:
+      if self.enableLongControl and tinkla_conf.use_pedal:
         # Pedal mode active: use software-managed target speed (Tinkla PCC_module)
         ret.cruiseState.speed = self.pedal_speed_kph * CV.KPH_TO_MS
       else:
@@ -395,241 +344,33 @@ class CarState(CarStateBase):
             self.prev_stalk_follow = stalk_follow
 
       curr_time_ms = _current_time_millis()
-      use_pedal = bool(tinkla_conf.use_pedal) if (TINKLA_CONF_AVAILABLE and tinkla_conf is not None) else False
-      pedal_factor = float(tinkla_conf.pedal_factor) if (TINKLA_CONF_AVAILABLE and tinkla_conf is not None) else 1.0
+      use_pedal = tinkla_conf.use_pedal
+      pedal_factor = float(tinkla_conf.pedal_factor)
       pedal_transform_valid = math.isfinite(pedal_factor) and abs(pedal_factor) > 1e-6
-      # Tinkla-style mutual exclusion (LONG_module.py lines 114-119):
-      #   pedal_long_allowed = pedal hardware specifically can control longitudinal
-      #   long_control_allowed = ANY longitudinal source is available (pedal OR stock cruise)
-      # When !use_pedal, stock cruise is the longitudinal source (like Tinkla ACC_module).
       pedal_long_allowed = use_pedal and pedal_transform_valid
       long_control_allowed = (not use_pedal) or pedal_transform_valid
-      
-      buttonEvents = []
-      
-      # ==============================================
-      # Double-Pull State Machine (Tinkla-style)
-      # ==============================================
-      # Single pull = Lateral only (steering)
-      # Double pull = Lateral + longitudinal
-      #
-      # With pedal (use_pedal=True):
-      #   Double pull → pedal longitudinal (openpilot controls accel/decel)
-      # Without pedal (use_pedal=False):
-      #   Single pull → lateral only (stock cruise stays off naturally)
-      #   Double pull → lateral + stock cruise engages normally
-      #
-      # CANCEL always disables everything.
-      # ==============================================
-      
-      # ==============================================
-      # TINKLA-STYLE RISING EDGE DETECTION
-      # ==============================================
-      # From Tinkla's PCC_module.py lines 152-161:
-      #   if (CS.cruise_buttons == CruiseButtons.MAIN
-      #       and self.prev_cruise_buttons != CruiseButtons.MAIN):
-      # This ONLY fires when button BECOMES MAIN, not on release!
-      # ==============================================
-      
-      # MAIN button: Rising edge detection (Tinkla pattern)
-      if (self.cruise_buttons == CruiseButtons.MAIN
-          and self.prev_cruise_buttons != CruiseButtons.MAIN):
-        carlog.warning("STALK MAIN pull detected | steerFault=%s doorOpen=%s gear=%s seatbelt=%s "
-                       "cruiseEnabled=%s enableLong=%s enableJustCC=%s pending=%s "
-                       "use_pedal=%s long_allowed=%s doublePull=%s",
-                       ret.steerFaultTemporary, ret.doorOpen, ret.gearShifter,
-                       ret.seatbeltUnlatched, self.cruiseEnabled, self.enableLongControl,
-                       self.enableJustCC, self.pending_enable,
-                       use_pedal, long_control_allowed, self.enableDoublePull)
-        # On Pre-AP, EAC_INHIBITED is the normal EPS idle state (no AP ECU present).
-        # The EPS transitions INHIBITED -> AVAILABLE -> ACTIVE once it sees valid
-        # EPAS steer commands from the carcontroller.  Tinkla never gated engagement
-        # on steerFaultTemporary — it let the system engage and suppressed lateral
-        # torque (latActive=False) until the EPS cleared.  We match that behavior.
-        if self.enableDoublePull:
-          # Update timing FIRST, then check (order matches Tinkla)
-          self.prev_stalk_pull_time_ms = self.stalk_pull_time_ms
-          self.stalk_pull_time_ms = curr_time_ms
-          double_pull = (
-            self.stalk_pull_time_ms - self.prev_stalk_pull_time_ms
-            < self.double_pull_window_ms
-          )
-          
-          if double_pull:
-            carlog.warning("STALK double-pull detected (dt=%dms, window=%dms)",
-                           self.stalk_pull_time_ms - self.prev_stalk_pull_time_ms,
-                           self.double_pull_window_ms)
-            # Double pull detected — enable lateral + longitudinal.
-            # long_control_allowed is True for both pedal and non-pedal modes
-            # (Tinkla LONG_module pattern: PCC or ACC, mutually exclusive).
-            self.cruiseEnabled = True
-            self.pending_enable = False
-            self.enableLongControl = long_control_allowed
-            self.enableJustCC = not long_control_allowed
-            if pedal_long_allowed:
-              self.longCtrlEvent = "pccEnabled"
-              # Capture target speed (Tinkla PCC_module.py line 172-178)
-              speed_uom_kph = CV.MPH_TO_KPH if self.speed_units == "MPH" else 1.0
-              current_speed_kph = int(ret.vEgo * CV.MS_TO_KPH / speed_uom_kph + 0.5) * speed_uom_kph
-              self.pedal_speed_kph = max(current_speed_kph, 0.0)
-            else:
-              self.pedal_speed_kph = 0.0
-              if not use_pedal:
-                self.preap_cc_engage_needed = True
-                self.preap_last_cc_spoof_ms = curr_time_ms
-          else:
-            carlog.warning("STALK first pull — lateral only, waiting for double (window=%dms)",
-                           self.double_pull_window_ms)
-            # First pull - engage lateral immediately, wait for possible double
-            was_long_active = self.enableLongControl
-            self.cruiseEnabled = True
-            self.enableLongControl = False
-            self.enableJustCC = True
-            self.pedal_speed_kph = 0.0
-            self.pending_enable = True
-            if was_long_active:
-              self.longCtrlEvent = "pccDisabled"
-            if not use_pedal:
-              self.preap_cc_cancel_needed = True
-              self.preap_last_cc_spoof_ms = curr_time_ms
-        else:
-          # Double-pull disabled: single pull = full control (pedal or stock cruise).
-          carlog.warning("STALK single-pull engage (doublePull disabled) — full control")
-          self.cruiseEnabled = True
-          self.pending_enable = False
-          self.enableLongControl = long_control_allowed
-          self.enableJustCC = not long_control_allowed
-          if pedal_long_allowed:
-            # Capture target speed
-            speed_uom_kph = CV.MPH_TO_KPH if self.speed_units == "MPH" else 1.0
-            current_speed_kph = int(ret.vEgo * CV.MS_TO_KPH / speed_uom_kph + 0.5) * speed_uom_kph
-            # Match Tinkla: latch to current rounded speed, no artificial minimum.
-            self.pedal_speed_kph = max(current_speed_kph, 0.0)
-          else:
-            self.pedal_speed_kph = 0.0
-            if not use_pedal:
-              self.preap_cc_engage_needed = True
-              self.preap_last_cc_spoof_ms = curr_time_ms
 
-      # General button event handling (for UI/buttonEvents)
-      if self.cruise_buttons != self.prev_cruise_buttons:
-        carlog.warning("STALK button change: %d -> %d", self.prev_cruise_buttons, self.cruise_buttons)
-        be = structs.CarState.ButtonEvent()
-        be.pressed = self.cruise_buttons != CruiseButtons.IDLE
-        
-        # Determine which button for event type
-        state = self.cruise_buttons if be.pressed else self.prev_cruise_buttons
-        
-        if state == CruiseButtons.MAIN:
-          be.type = ButtonType.setCruise
-          if be.pressed:
-            self.last_stalk_non_cancel_ms = curr_time_ms
-            
-        elif state == CruiseButtons.CANCEL:
-          # Push away - cancel everything.
-          # Ignore a short synthetic cancel pulse generated by pedal-over-CC
-          # immediately after MAIN/RES/DECEL press edges.
-          # This prevents self-cancel when spoofing stock-CC cancellation.
-          is_possible_auto_cancel = (
-            (self.enableLongControl and (curr_time_ms - self.last_stalk_non_cancel_ms) < 600)
-            or ((curr_time_ms - self.preap_last_cc_spoof_ms) < 300)
-          )
-          if not is_possible_auto_cancel:
-            carlog.warning("STALK CANCEL — disabling all control")
-            be.type = ButtonType.cancel
-            was_long_active = self.enableLongControl
-            self.cruiseEnabled = False
-            self.enableLongControl = False
-            self.enableJustCC = False
-            self.pending_enable = False
-            self.pedal_speed_kph = 0.0
-            # Reset timing to prevent false double-pulls after cancel
-            self.stalk_pull_time_ms = 0
-            self.prev_stalk_pull_time_ms = -1000
-            if was_long_active:
-              self.longCtrlEvent = "pccDisabled"
-          else:
-            be.type = ButtonType.unknown
-
-        elif CruiseButtons.is_accel(state):
-          # Up - accelerate (Tinkla PCC_module.py lines 194-207)
-          be.type = ButtonType.accelCruise
-          if be.pressed:
-            self.last_stalk_non_cancel_ms = curr_time_ms
-            if not use_pedal and self.cruiseEnabled and not self.enableLongControl:
-              self.enableLongControl = True
-              self.pending_enable = False
-            # Only adjust speed on press edge (not release) to avoid double-increment
-            if self.enableLongControl:
-              speed_uom_kph = CV.MPH_TO_KPH if self.speed_units == "MPH" else 1.0
-              actual_kph = int(ret.vEgo * CV.MS_TO_KPH / speed_uom_kph + 0.5) * speed_uom_kph
-              if state == CruiseButtons.RES_ACCEL:
-                self.pedal_speed_kph = max(self.pedal_speed_kph, actual_kph) + speed_uom_kph
-              else:  # RES_ACCEL_2ND
-                self.pedal_speed_kph = max(self.pedal_speed_kph, actual_kph) + 5 * speed_uom_kph
-              self.pedal_speed_kph = min(self.pedal_speed_kph, 270.0)
-
-        elif CruiseButtons.is_decel(state):
-          # Down - decelerate (Tinkla PCC_module.py lines 204-207)
-          be.type = ButtonType.decelCruise
-          if be.pressed:
-            self.last_stalk_non_cancel_ms = curr_time_ms
-            if not use_pedal and self.cruiseEnabled and not self.enableLongControl:
-              self.enableLongControl = True
-              self.pending_enable = False
-            # Only adjust speed on press edge (not release) to avoid double-decrement
-            if self.enableLongControl:
-              speed_uom_kph = CV.MPH_TO_KPH if self.speed_units == "MPH" else 1.0
-              if state == CruiseButtons.DECEL_SET:
-                self.pedal_speed_kph = self.pedal_speed_kph - speed_uom_kph
-              else:  # DECEL_2ND
-                self.pedal_speed_kph = self.pedal_speed_kph - 5 * speed_uom_kph
-              self.pedal_speed_kph = max(self.pedal_speed_kph, 0.0)
-          
-        else:
-          be.type = ButtonType.unknown
-        
-        buttonEvents.append(be)
-      
-      # Double-pull window expired — lateral is already engaged from the first
-      # pull, so just clear the pending flag.
-      if self.pending_enable:
-        time_since_pull = curr_time_ms - self.stalk_pull_time_ms
-        if time_since_pull > self.double_pull_window_ms:
-          self.pending_enable = False
-
-      # Brake press drops longitudinal persistently while keeping lateral engaged.
-      # In pedal mode: software drops long and emits pccDisabled event.
-      # In non-pedal mode: stock CC handles its own brake disengage.
-      # Either way, suppress brakePressed so openpilot's generic brake-disengage
-      # path doesn't kill lateral.
-      brake_rising_edge = real_brake_pressed and not self.preap_brake_pressed_prev
-      if use_pedal:
-        if brake_rising_edge and self.cruiseEnabled and self.enableLongControl:
-          carlog.warning("BRAKE rising edge — dropping longitudinal, keeping lateral")
-          self.enableLongControl = False
-          self.enableJustCC = True
-          self.pending_enable = False
-          self.pedal_speed_kph = 0.0
-          self.longCtrlEvent = "pccDisabled"
+      # Delegate engagement logic to PreAPEngagement module
+      button_events = self.engagement.process_buttons(
+        self.cruise_buttons, self.prev_cruise_buttons, curr_time_ms,
+        ret.vEgo, self.speed_units, use_pedal, pedal_long_allowed,
+        long_control_allowed, real_brake_pressed)
+      # Suppress brakePressed so openpilot's generic brake-disengage path doesn't kill lateral
       ret.brakePressed = False
-      
-      ret.buttonEvents = buttonEvents
-      
-      # Cruise enabled requires: engaged, door closed, in Drive, seatbelt
-      can_engage = (not ret.doorOpen) and (ret.gearShifter == structs.CarState.GearShifter.drive) and (not ret.seatbeltUnlatched)
-      ret.cruiseState.enabled = self.cruiseEnabled and can_engage
+      ret.buttonEvents = button_events
 
-      # If we can't engage, reset our state
-      if not can_engage and self.cruiseEnabled:
-        carlog.warning("ENGAGE BLOCKED — can_engage=False: doorOpen=%s gear=%s seatbelt=%s | resetting cruiseEnabled",
-                       ret.doorOpen, ret.gearShifter, ret.seatbeltUnlatched)
-        self.cruiseEnabled = False
-        self.enableLongControl = False
-        self.enableJustCC = False
-        self.pending_enable = False
+      # Check engagement prerequisites (door, gear, seatbelt)
+      can_engage = self.engagement.check_can_engage(ret.doorOpen, ret.gearShifter, ret.seatbeltUnlatched)
+      ret.cruiseState.enabled = self.engagement.cruiseEnabled and can_engage
 
-      self.preap_brake_pressed_prev = real_brake_pressed
+      # Bridge engagement state for carcontroller reads
+      self.cruiseEnabled = self.engagement.cruiseEnabled
+      self.enableLongControl = self.engagement.enableLongControl
+      self.enableJustCC = self.engagement.enableJustCC
+      self.pedal_speed_kph = self.engagement.pedal_speed_kph
+      self.longCtrlEvent = self.engagement.longCtrlEvent
+      self.preap_cc_cancel_needed = self.engagement.preap_cc_cancel_needed
+      self.preap_cc_engage_needed = self.engagement.preap_cc_engage_needed
 
     # ============================================
     # Comma Pedal Parsing (Pre-AP only)
@@ -654,12 +395,8 @@ class CarState(CarStateBase):
           
           # Match Tinkla semantics: convert decoded pedal value to DI units.
           # Do NOT apply M1/M2 scaling here; DBC decoding already did that.
-          if TINKLA_CONF_AVAILABLE and tinkla_conf is not None:
-            self.pedal_interceptor_value = float(tinkla_conf.pedal_to_di(interceptor_gas))
-            self.pedal_interceptor_value2 = float(tinkla_conf.pedal_to_di(interceptor_gas2))
-          else:
-            self.pedal_interceptor_value = interceptor_gas
-            self.pedal_interceptor_value2 = interceptor_gas2
+          self.pedal_interceptor_value = float(tinkla_conf.pedal_to_di(interceptor_gas))
+          self.pedal_interceptor_value2 = float(tinkla_conf.pedal_to_di(interceptor_gas2))
           
           # Track pedal responsiveness
           if self.pedal_idx != self.prev_pedal_idx:
@@ -675,8 +412,7 @@ class CarState(CarStateBase):
 
       # In pedal mode, use interceptor threshold for gas override semantics.
       # This matches Tinkla behavior and avoids sticky DI_pedalPos > 0 overrides.
-      use_pedal = bool(tinkla_conf.use_pedal) if (TINKLA_CONF_AVAILABLE and tinkla_conf is not None) else False
-      if use_pedal:
+      if tinkla_conf.use_pedal:
         ret.gasPressed = self.pedal_interceptor_value > PEDAL_DI_PRESSED
       
       # Read torque level for pedal zero learning (from DI_torque1)
@@ -698,8 +434,7 @@ class CarState(CarStateBase):
 
     # Expose pedal-specific long control status for selfdrived alerts.
     # True only when pedal hardware is the longitudinal source (not stock cruise).
-    _use_pedal_flag = bool(tinkla_conf.use_pedal) if (TINKLA_CONF_AVAILABLE and tinkla_conf is not None) else False
-    ret.pedalLongActive = self.enableLongControl and _use_pedal_flag
+    ret.pedalLongActive = self.enableLongControl and tinkla_conf.use_pedal
 
     return ret
 
@@ -766,7 +501,7 @@ class CarState(CarStateBase):
             ("ESP_B", 0),
           ]
           # Pedal bus: matches Tinkla get_cam_can_parser() — bus 2 by default, bus 0 if pedal_can_zero
-          pedal_can_zero = tinkla_conf.pedal_can_zero if (TINKLA_CONF_AVAILABLE and tinkla_conf) else False
+          pedal_can_zero = tinkla_conf.pedal_can_zero
           pedal_bus = 0 if pedal_can_zero else 2
           ap_bus = CANBUS.party  # Bus 0 for non-pedal AP messages
         
