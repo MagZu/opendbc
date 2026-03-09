@@ -6,7 +6,7 @@ from opendbc.car.tesla.carcontroller import CarController
 from opendbc.car.tesla.carstate import CarState
 from opendbc.car.tesla.values import TeslaSafetyFlags, CAR, TeslaLegacyParams, LEGACY_CARS, CruiseButtons
 from opendbc.car.tesla.radar_interface import RadarInterface
-from opendbc.car.tesla.tinkla_conf import tinkla_conf
+from opendbc.car.tesla.nap_conf import nap_conf
 from opendbc.car.tesla.preap.constants import (
   ACCEL_PREAP_BP, ACCEL_PREAP_PROFILES,
   PEDAL_LONG_K_BP, PEDAL_LONG_KP_V, PEDAL_LONG_KI_V,
@@ -82,9 +82,9 @@ class CarInterface(CarInterfaceBase):
     if candidate == CAR.TESLA_MODEL_S_PREAP:
       flags = TeslaSafetyFlags.FLAG_PREAP | TeslaSafetyFlags.LONG_CONTROL
 
-      use_pedal = tinkla_conf.use_pedal
-      radar_enabled = tinkla_conf.radar_enabled
-      radar_behind_nosecone = tinkla_conf.radar_behind_nosecone
+      use_pedal = nap_conf.use_pedal
+      radar_enabled = nap_conf.radar_enabled
+      radar_behind_nosecone = nap_conf.radar_behind_nosecone
       print(f"[NAP] interface.py fingerprint: use_pedal={use_pedal}, "
             f"radar_enabled={radar_enabled}, radar_behind_nosecone={radar_behind_nosecone}, "
             f"radarUnavailable={not radar_enabled}")

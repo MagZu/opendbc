@@ -8,7 +8,7 @@ from opendbc.car.tesla.teslacan import TeslaCAN
 from opendbc.car.tesla.teslacan_legacy import TeslaCANRaven, TeslaCANPreAP
 from opendbc.car.tesla.values import CarControllerParams, CANBUS, LEGACY_CARS, CAR, CruiseButtons
 from opendbc.car.vehicle_model import VehicleModel
-from opendbc.car.tesla.tinkla_conf import tinkla_conf, PEDAL_DI_MIN, PEDAL_DI_ZERO
+from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_MIN, PEDAL_DI_ZERO
 from opendbc.car.tesla.pedal.controller import compute_pedal_command, PEDAL_RAMP_RATE
 
 
@@ -52,7 +52,7 @@ class CarController(CarControllerBase):
         self.pedal_packer = CANPacker("comma_pedal")
         self.tesla_can = TeslaCANPreAP(self.packers, self.pedal_packer)
         
-        self.tesla_can.pedal_can_bus = tinkla_conf.pedal_can_bus
+        self.tesla_can.pedal_can_bus = nap_conf.pedal_can_bus
       else:
         self.tesla_can = TeslaCANRaven(self.packers)
         
@@ -100,8 +100,8 @@ class CarController(CarControllerBase):
         cs_enable_long = getattr(CS, 'enableLongControl', False)
         requested_long = cs_cruise_enabled and cs_enable_long
         long_active = requested_long and CC.longActive
-        use_pedal = tinkla_conf.use_pedal
-        pedal_factor = float(tinkla_conf.pedal_factor)
+        use_pedal = nap_conf.use_pedal
+        pedal_factor = float(nap_conf.pedal_factor)
         pedal_transform_valid = bool(np.isfinite(pedal_factor) and abs(pedal_factor) > 1e-6)
         pedal_long_allowed = bool(use_pedal and pedal_transform_valid)
         if long_active and not self.prev_preap_long_active:
@@ -202,13 +202,13 @@ class CarController(CarControllerBase):
             except Exception:
               # Fail-safe: on any unexpected pedal path exception, send disabled pedal.
               carlog.exception("Pre-AP pedal command path failed; sending disabled pedal command")
-              idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
+              idle_pedal = nap_conf.di_to_pedal(PEDAL_DI_ZERO)
               can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
               self.prev_pedal_di = 0.0
 
            elif use_pedal and not pedal_transform_valid:
              # Safety gate: block pedal actuation when pedal transform is invalid.
-             idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
+             idle_pedal = nap_conf.di_to_pedal(PEDAL_DI_ZERO)
              can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
              self.prev_pedal_di = 0.0
 
@@ -221,14 +221,14 @@ class CarController(CarControllerBase):
              if use_pedal:
                if pedal_responding:
                  # Pedal is alive — send idle keepalive at 50Hz (every frame %2)
-                 idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
+                 idle_pedal = nap_conf.di_to_pedal(PEDAL_DI_ZERO)
                  can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
                elif self.frame % 100 == 0:
                  # Pedal not responding — send disabled reset at 1Hz to wake it up.
                  # Low rate avoids flooding a dead bus (can_tx_check_min_slots_free
                  # blocks ALL buses if any one queue fills).  Tinkla uses 2Hz here
                  # (frame%50) but 1Hz is safer for dead-bus tolerance.
-                 idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
+                 idle_pedal = nap_conf.di_to_pedal(PEDAL_DI_ZERO)
                  can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
              # Reset state when not active
              self.prev_pedal_di = 0.0
@@ -247,7 +247,7 @@ class CarController(CarControllerBase):
       if CC.cruiseControl.cancel:
         if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
            if not getattr(CS, 'pedal_timeout', True):
-             idle_pedal = tinkla_conf.di_to_pedal(PEDAL_DI_ZERO)
+             idle_pedal = nap_conf.di_to_pedal(PEDAL_DI_ZERO)
              can_sends.append(self.tesla_can.create_pedal_command(idle_pedal, enable=0))
         else:
            cntr = (CS.das_control["DAS_controlCounter"] + 1) % 8

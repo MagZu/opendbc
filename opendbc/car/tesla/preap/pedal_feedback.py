@@ -4,7 +4,7 @@ Pre-AP Comma Pedal feedback parser.
 Extracts GAS_SENSOR (0x552) CAN parsing and pedal health tracking from carstate.py.
 Ported from Tinkla's carstate.py pedal interceptor parsing.
 """
-from opendbc.car.tesla.tinkla_conf import tinkla_conf, PEDAL_DI_PRESSED
+from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_PRESSED
 
 PEDAL_TIMEOUT_MS = 500
 
@@ -53,8 +53,8 @@ class PedalFeedback:
 
       # Convert decoded pedal value to DI units.
       # Do NOT apply M1/M2 scaling here; DBC decoding already did that.
-      self.interceptor_value = float(tinkla_conf.pedal_to_di(interceptor_gas))
-      self.interceptor_value2 = float(tinkla_conf.pedal_to_di(interceptor_gas2))
+      self.interceptor_value = float(nap_conf.pedal_to_di(interceptor_gas))
+      self.interceptor_value2 = float(nap_conf.pedal_to_di(interceptor_gas2))
 
       # Track pedal responsiveness
       if self.idx != self.prev_idx:

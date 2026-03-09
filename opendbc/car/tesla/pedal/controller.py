@@ -1,7 +1,7 @@
 from numpy import interp, clip
 
-from opendbc.car.tesla.tinkla_conf import (
-  tinkla_conf,
+from opendbc.car.tesla.nap_conf import (
+  nap_conf,
   PEDAL_DI_MIN, PEDAL_DI_ZERO,
   PEDAL_BP, PEDAL_V_DEFAULT,
   ACCEL_MAX,
@@ -13,7 +13,7 @@ from opendbc.car.tesla.tinkla_conf import (
 # 2.5 DI/step = 125 DI/s.  P85+ at highway (max=75 DI): 0→full in 0.6s.
 PEDAL_RAMP_RATE = 2.5
 
-# Fallback pedal constants (used when tinkla_conf unavailable)
+# Fallback pedal constants (used when nap_conf unavailable)
 # From Tinkla tunes.py
 PEDAL_DI_MIN_DEFAULT = -5
 PEDAL_DI_ZERO_DEFAULT = 0
@@ -23,7 +23,7 @@ PEDAL_ZERO_DEFAULT = PEDAL_CALIB_ZERO_DEFAULT - 1.0 / PEDAL_CALIB_FACTOR_DEFAULT
 
 
 def _fallback_di_to_pedal(val):
-  """Default DI→pedal transform when tinkla_conf unavailable. Matches Tinkla tunes.py."""
+  """Default DI→pedal transform when nap_conf unavailable. Matches Tinkla tunes.py."""
   return PEDAL_ZERO_DEFAULT + (val - PEDAL_DI_ZERO_DEFAULT) / PEDAL_CALIB_FACTOR_DEFAULT
 
 
@@ -46,8 +46,8 @@ def compute_pedal_command(accel_request: float, v_ego: float, prev_pedal_di: flo
     (pedal_voltage, updated_prev_pedal_di) — caller stores the second value
     for rate limiting on the next call.
   """
-  if tinkla_conf is None:
-    # Fallback: simple linear mapping if tinkla_conf unavailable
+  if nap_conf is None:
+    # Fallback: simple linear mapping if nap_conf unavailable
     pedal_di = float(clip(interp(accel_request, [-1.5, 0., 2.0], [-5., 0., 100.]), -5, 100))
     pedal_di = float(clip(pedal_di,
                           prev_pedal_di - PEDAL_RAMP_RATE,
@@ -55,7 +55,7 @@ def compute_pedal_command(accel_request: float, v_ego: float, prev_pedal_di: flo
     return _fallback_di_to_pedal(pedal_di), pedal_di
 
   # Trim-specific max pedal (P85+, P85, S85, S60, Generic)
-  pedal_profile = tinkla_conf.get_pedal_profile_values()
+  pedal_profile = nap_conf.get_pedal_profile_values()
   max_pedal_value = float(interp(v_ego, PEDAL_BP, pedal_profile))
 
   # Full regen available at all speeds (PID is already capped at -1.5 m/s²)
@@ -78,6 +78,6 @@ def compute_pedal_command(accel_request: float, v_ego: float, prev_pedal_di: flo
                         prev_pedal_di + PEDAL_RAMP_RATE))
 
   # Transform DI -> pedal voltage via calibration
-  pedal_cmd = tinkla_conf.di_to_pedal(pedal_di)
+  pedal_cmd = nap_conf.di_to_pedal(pedal_di)
 
   return pedal_cmd, pedal_di

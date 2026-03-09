@@ -38,7 +38,7 @@ from opendbc.car.tesla.pedal.controller import (
   compute_pedal_command, PEDAL_RAMP_RATE,
 )
 from opendbc.car.tesla.carcontroller import CarController
-from opendbc.car.tesla.tinkla_conf import tinkla_conf, PEDAL_DI_MIN as TC_PEDAL_DI_MIN
+from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_MIN as TC_PEDAL_DI_MIN
 
 
 class TestFeedforwardDominantGains(unittest.TestCase):
@@ -120,13 +120,13 @@ class TestPedalRateLimiter(unittest.TestCase):
   def test_neutral_accel(self):
     """accel_request = 0.0 -> pedal near zero (coast)."""
     result, _ = compute_pedal_command(0.0, v_ego=10.0, prev_pedal_di=0.0)
-    zero_pedal = tinkla_conf.di_to_pedal(0.0)
+    zero_pedal = nap_conf.di_to_pedal(0.0)
     self.assertAlmostEqual(result, zero_pedal, places=4)
 
   def test_positive_accel_is_positive(self):
     """accel_request = 1.0 -> pedal above zero."""
     result, _ = compute_pedal_command(1.0, v_ego=10.0, prev_pedal_di=0.0)
-    zero_pedal = tinkla_conf.di_to_pedal(0.0)
+    zero_pedal = nap_conf.di_to_pedal(0.0)
     self.assertGreater(result, zero_pedal)
 
   def test_engage_edge_resets_prev(self):

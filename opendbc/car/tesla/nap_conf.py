@@ -3,7 +3,7 @@ Tesla Pre-AP Configuration Helper
 Ported from Tinkla's CFG_module.py pattern
 
 Storage Backend: openpilot Params system for NAP-prefixed keys (shared with UI),
-JSON file at /data/tinkla_params.json for legacy/non-UI params.
+JSON file at /data/nap_params.json for legacy/non-UI params.
 """
 
 import json
@@ -19,13 +19,13 @@ try:
 except ImportError:
   _PARAMS_AVAILABLE = False
 
-print(f"[NAP] tinkla_conf: _PARAMS_AVAILABLE={_PARAMS_AVAILABLE}")
+print(f"[NAP] nap_conf: _PARAMS_AVAILABLE={_PARAMS_AVAILABLE}")
 
 
 # ============================================
 # Storage Configuration
 # ============================================
-CONFIG_FILE = "/data/tinkla_params.json"
+CONFIG_FILE = "/data/nap_params.json"
 
 # Default values for all parameters
 DEFAULT_CONFIG = {
@@ -59,7 +59,7 @@ DEFAULT_CONFIG = {
 # These are in "DI units" - the internal representation
 # before calibration transform is applied
 PEDAL_DI_MIN = -5       # Max regen braking (coasting hard)
-PEDAL_DI_ZERO = 0       # Neutral (no accel, no regen) 
+PEDAL_DI_ZERO = 0       # Neutral (no accel, no regen)
 PEDAL_DI_PRESSED = 2    # Threshold for "pedal pressed" detection
 
 # Acceleration limits
@@ -96,7 +96,7 @@ ACCEL_MAX_PROFILES = {
 }
 ACCEL_MAX_DEFAULT = ACCEL_MAX_PROFILES['Chill']
 
-# Pedal profile index mapping (Params stores 1-4, tinkla_conf uses name strings)
+# Pedal profile index mapping (Params stores 1-4, nap_conf uses name strings)
 _PROFILE_NAMES = list(PEDAL_PROFILES.keys())  # S60, S85, P85, P85+, Generic
 _PROFILE_INDEX_TO_NAME = {i + 1: name for i, name in enumerate(_PROFILE_NAMES[:4])}
 _PROFILE_NAME_TO_INDEX = {name: i for i, name in _PROFILE_INDEX_TO_NAME.items()}
@@ -105,15 +105,15 @@ _PROFILE_NAME_TO_INDEX = {name: i for i, name in _PROFILE_INDEX_TO_NAME.items()}
 def transform_di_to_pedal(val: float, pedal_zero: float, pedal_factor: float) -> float:
   """
   Convert DI (Driver Intent) units to actual pedal voltage.
-  
+
   From Tinkla tunes.py:
     return PEDAL_ZERO + (val - PEDAL_DI_ZERO) / PEDAL_FACTOR
-  
+
   Args:
     val: Value in DI units (-5 to ~100)
     pedal_zero: Calibrated zero point (voltage at coast)
     pedal_factor: Calibration factor from calibration tool
-    
+
   Returns:
     Pedal voltage to send to Comma Pedal
   """
@@ -125,39 +125,39 @@ def transform_di_to_pedal(val: float, pedal_zero: float, pedal_factor: float) ->
 def transform_pedal_to_di(val: float, pedal_zero: float, pedal_factor: float) -> float:
   """
   Convert actual pedal voltage to DI (Driver Intent) units.
-  
+
   From Tinkla tunes.py:
     return PEDAL_DI_ZERO + (val - PEDAL_ZERO) * PEDAL_FACTOR
-  
+
   Args:
     val: Pedal voltage reading
     pedal_zero: Calibrated zero point (voltage at coast)
     pedal_factor: Calibration factor from calibration tool
-    
+
   Returns:
     Value in DI units
   """
   return PEDAL_DI_ZERO + (val - pedal_zero) * pedal_factor
 
 
-class TinklaConf:
+class NAPConf:
   """
   Configuration helper for Tesla Pre-AP vehicles.
-  
+
   Uses a JSON file backend for persistent storage, avoiding
   OpenPilot's Params whitelist restrictions.
-  
-  Storage: /data/tinkla_params.json
+
+  Storage: /data/nap_params.json
   """
-  
+
   def __init__(self):
     self._cache = {}
     self._load()
-  
+
   # ============================================
   # Storage Backend (JSON File)
   # ============================================
-  
+
   def _load(self) -> None:
     """Load configuration from JSON file, or use defaults."""
     try:
@@ -173,22 +173,22 @@ class TinklaConf:
     except Exception:
       # JSON parse error or read error - use defaults
       self._cache = DEFAULT_CONFIG.copy()
-  
+
   def _save(self) -> None:
     """
     Atomically save configuration to JSON file.
-    
+
     Uses write-to-temp + rename pattern to prevent corruption
     if power cuts during write.
     """
     try:
       # Ensure /data directory exists
       os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-      
+
       # Write to temporary file first
       fd, tmp_path = tempfile.mkstemp(
         dir=os.path.dirname(CONFIG_FILE),
-        prefix='.tinkla_params_',
+        prefix='.nap_params_',
         suffix='.tmp'
       )
       try:
@@ -205,16 +205,16 @@ class TinklaConf:
         raise
     except Exception:
       pass  # Silently fail - don't crash the car
-  
+
   def _get(self, key: str, default):
     """Get a value from cache with fallback to default."""
     return self._cache.get(key, default)
-  
+
   def _put(self, key: str, value) -> None:
     """Set a value in cache and persist to disk."""
     self._cache[key] = value
     self._save()
-  
+
   # ============================================
   # Params-backed Properties
   # Reads/writes openpilot Params when available,
@@ -291,22 +291,22 @@ class TinklaConf:
     if _PARAMS_AVAILABLE:
       _params.put(NAPParamKeys.PEDAL_CAN_BUS, 0 if value else 2)
     self._put('pedal_can_zero', bool(value))
-  
+
   # ============================================
   # Double-Pull Engagement Parameters
   # ============================================
-  
+
   @property
   def double_pull_enabled(self) -> bool:
     """
     Double-pull engagement mode is ALWAYS enabled for Pre-AP Tesla.
-    
+
     This is a safety feature and cannot be disabled:
     - Single pull: Engage lateral control (steering) only
     - Double pull (within 750ms): Engage lateral + longitudinal
     """
     return True  # Always ON - not configurable for safety
-  
+
   @property
   def double_pull_window_ms(self) -> int:
     """
@@ -314,12 +314,12 @@ class TinklaConf:
     Default: 750ms
     """
     return int(self._get('double_pull_window_ms', 750))
-  
+
   @double_pull_window_ms.setter
   def double_pull_window_ms(self, value: int) -> None:
     # Clamp to 300 - 1500 ms
     self._put('double_pull_window_ms', max(300, min(1500, int(value))))
-  
+
   @property
   def accel_profile(self) -> str:
     """
@@ -335,38 +335,38 @@ class TinklaConf:
   def accel_profile(self, value: str) -> None:
     if value in ACCEL_MAX_PROFILES:
       self._put('accel_profile', value)
-  
+
   # ============================================
   # Pedal Calibration Parameters
   # ============================================
-  
+
   @property
   def pedal_min(self) -> int:
     """Calibrated minimum pedal sensor value (released)."""
     return int(self._get('pedal_min', 0))
-  
+
   @pedal_min.setter
   def pedal_min(self, value: int) -> None:
     self._put('pedal_min', int(value))
-  
+
   @property
   def pedal_max(self) -> int:
     """Calibrated maximum pedal sensor value (floored)."""
     return int(self._get('pedal_max', 1023))
-  
+
   @pedal_max.setter
   def pedal_max(self, value: int) -> None:
     self._put('pedal_max', int(value))
-  
+
   @property
   def radar_offset(self) -> float:
     """Physical offset of the radar in meters."""
     return float(self._get('radar_offset', 0.0))
-  
+
   @radar_offset.setter
   def radar_offset(self, value: float) -> None:
     self._put('radar_offset', float(value))
-  
+
   @property
   def pedal_calib_min(self) -> float:
     """Calibrated minimum pedal value (from calibration tool)."""
@@ -434,16 +434,16 @@ class TinklaConf:
       if _PARAMS_AVAILABLE and value in _PROFILE_NAME_TO_INDEX:
         _params.put(NAPParamKeys.PEDAL_PROFILE, _PROFILE_NAME_TO_INDEX[value])
       self._put('pedal_profile', value)
-  
+
   # ============================================
   # Utility Methods
   # ============================================
-  
+
   @property
   def pedal_can_bus(self) -> int:
     """Returns the CAN bus number for the pedal (0 or 2)."""
     return 0 if self.pedal_can_zero else 2
-  
+
   def get_pedal_profile_values(self) -> list:
     """Get the max pedal values for current profile."""
     return PEDAL_PROFILES.get(self.pedal_profile, PEDAL_V_DEFAULT)
@@ -451,15 +451,15 @@ class TinklaConf:
   def get_accel_profile_values(self) -> list:
     """Get the planner accel envelope for current accel profile."""
     return ACCEL_MAX_PROFILES.get(self.accel_profile, ACCEL_MAX_DEFAULT)
-  
+
   def di_to_pedal(self, val: float) -> float:
     """Convert DI units to pedal voltage using current calibration."""
     return transform_di_to_pedal(val, self.pedal_zero, self.pedal_factor)
-  
+
   def pedal_to_di(self, val: float) -> float:
     """Convert pedal voltage to DI units using current calibration."""
     return transform_pedal_to_di(val, self.pedal_zero, self.pedal_factor)
-  
+
   def print_config(self) -> None:
     """Print current configuration to console."""
     print("=== Tesla Pre-AP Configuration ===")
@@ -490,7 +490,7 @@ class TinklaConf:
     print(f"    Radar Offset:         {self.radar_offset}m")
     print("")
     print("==================================")
-  
+
   def get_all_params(self) -> dict:
     """Get all parameters as a dictionary (for CLI tool)."""
     return {
@@ -515,16 +515,16 @@ class TinklaConf:
       'radar_behind_nosecone': self.radar_behind_nosecone,
       'radar_offset': self.radar_offset,
     }
-  
+
   def reset_to_defaults(self) -> None:
     """Reset all parameters to safe defaults."""
     self._cache = DEFAULT_CONFIG.copy()
     self._save()
-  
+
   def reload(self) -> None:
     """Reload configuration from disk (useful for external edits)."""
     self._load()
 
 
 # Singleton instance for easy import
-tinkla_conf = TinklaConf()
+nap_conf = NAPConf()

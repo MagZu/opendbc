@@ -78,7 +78,7 @@ class TeslaCANPreAP(TeslaCANRaven):
     super().__init__(packers)
     self.pedal_packer = pedal_packer
     # Pedal CAN bus: 2 by default, can be 0 if configured
-    # This will be set by carcontroller based on tinkla_conf
+    # This will be set by carcontroller based on nap_conf
     self.pedal_can_bus = 2
     # CRITICAL: Dedicated pedal counter that increments with each message sent
     # This is required by the pedal firmware's watchdog - it expects consecutive counters
@@ -144,7 +144,7 @@ class TeslaCANPreAP(TeslaCANRaven):
       Byte 5: Checksum
     
     Args:
-      accel_command: Pedal voltage value (from calibration transform via tinkla_conf.di_to_pedal())
+      accel_command: Pedal voltage value (from calibration transform via nap_conf.di_to_pedal())
       enable: 1 to enable pedal actuation, 0 to disable (idle/coast)
       pedal_can_bus: CAN bus for pedal (0 or 2), defaults to self.pedal_can_bus
       

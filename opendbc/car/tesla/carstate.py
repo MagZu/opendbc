@@ -8,7 +8,7 @@ from opendbc.car.interfaces import CarStateBase
 from opendbc.car.carlog import carlog
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR, TeslaLegacyParams, LEGACY_CARS, CruiseButtons
 from opendbc.car.tesla.nap_params import NAPParamKeys
-from opendbc.car.tesla.tinkla_conf import tinkla_conf
+from opendbc.car.tesla.nap_conf import nap_conf
 from opendbc.car.tesla.preap.engagement import PreAPEngagement
 from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
 
@@ -63,8 +63,8 @@ class CarState(CarStateBase):
 
     # Pre-AP engagement state machine (double-pull, button handling, brake override)
     self.engagement = PreAPEngagement(
-      double_pull_enabled=tinkla_conf.double_pull_enabled,
-      double_pull_window_ms=tinkla_conf.double_pull_window_ms,
+      double_pull_enabled=nap_conf.double_pull_enabled,
+      double_pull_window_ms=nap_conf.double_pull_window_ms,
     )
     # Bridge attributes: carcontroller reads these via getattr(CS, 'X', default)
     self.cruiseEnabled = False
@@ -259,7 +259,7 @@ class CarState(CarStateBase):
       self.speed_units = speed_units
 
     if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      if self.enableLongControl and tinkla_conf.use_pedal:
+      if self.enableLongControl and nap_conf.use_pedal:
         # Pedal mode active: use software-managed target speed (Tinkla PCC_module)
         ret.cruiseState.speed = self.pedal_speed_kph * CV.KPH_TO_MS
       else:
@@ -338,8 +338,8 @@ class CarState(CarStateBase):
             self.prev_stalk_follow = stalk_follow
 
       curr_time_ms = _current_time_millis()
-      use_pedal = tinkla_conf.use_pedal
-      pedal_factor = float(tinkla_conf.pedal_factor)
+      use_pedal = nap_conf.use_pedal
+      pedal_factor = float(nap_conf.pedal_factor)
       pedal_transform_valid = math.isfinite(pedal_factor) and abs(pedal_factor) > 1e-6
       pedal_long_allowed = use_pedal and pedal_transform_valid
       long_control_allowed = (not use_pedal) or pedal_transform_valid
@@ -381,7 +381,7 @@ class CarState(CarStateBase):
 
       # In pedal mode, use interceptor threshold for gas override semantics.
       # Matches Tinkla behavior: avoids sticky DI_pedalPos > 0 overrides.
-      if tinkla_conf.use_pedal:
+      if nap_conf.use_pedal:
         ret.gasPressed = self.pedal.gas_pressed
 
     # Messages needed by carcontroller
@@ -397,7 +397,7 @@ class CarState(CarStateBase):
 
     # Expose pedal-specific long control status for selfdrived alerts.
     # True only when pedal hardware is the longitudinal source (not stock cruise).
-    ret.pedalLongActive = self.enableLongControl and tinkla_conf.use_pedal
+    ret.pedalLongActive = self.enableLongControl and nap_conf.use_pedal
 
     return ret
 
@@ -464,7 +464,7 @@ class CarState(CarStateBase):
             ("ESP_B", 0),
           ]
           # Pedal bus: matches Tinkla get_cam_can_parser() — bus 2 by default, bus 0 if pedal_can_zero
-          pedal_can_zero = tinkla_conf.pedal_can_zero
+          pedal_can_zero = nap_conf.pedal_can_zero
           pedal_bus = 0 if pedal_can_zero else 2
           ap_bus = CANBUS.party  # Bus 0 for non-pedal AP messages
         
