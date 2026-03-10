@@ -98,6 +98,17 @@ def get_preap_params(ret, fingerprint):
     ret.longitudinalTuning.kiBP = [0.0]
     ret.longitudinalTuning.kiV = [0.0]
 
+  # Shared legacy params (duplicated here so _get_params_sx can early-return
+  # for Pre-AP, eliminating Pre-AP as a merge conflict surface)
+  ret.steerLimitTimer = 0.4
+  ret.steerActuatorDelay = 0.1
+  ret.steerAtStandstill = True
+  ret.alphaLongitudinalAvailable = False
+  ret.vEgoStopping = 0.1
+  ret.vEgoStarting = 0.1
+  # Tinkla uses a stronger stopping decel ramp for Pre-AP.
+  ret.stoppingDecelRate = 1.0
+
   # Set physical params explicitly to avoid 0.0 ratio error
   ret.mass = 2100. + STD_CARGO_KG
   ret.wheelbase = 2.959

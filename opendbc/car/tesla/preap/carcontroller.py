@@ -1,15 +1,36 @@
 """
-Pre-AP longitudinal controller — pedal commands and cruise-over-CC logic.
+Pre-AP longitudinal controller and CAN init — pedal commands, cruise-over-CC,
+and hardware wiring for Pre-AP Model S.
 
 Extracted from carcontroller.py so upstream changes to the main update()
-loop don't conflict with Pre-AP longitudinal logic.
+loop and __init__() don't conflict with Pre-AP logic.
 """
 import numpy as np
 
+from opendbc.can import CANPacker
+from opendbc.car import Bus
 from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_MIN, PEDAL_DI_ZERO
 from opendbc.car.tesla.pedal.controller import compute_pedal_command
-from opendbc.car.tesla.values import CruiseButtons
+from opendbc.car.tesla.teslacan_legacy import TeslaCANPreAP
+from opendbc.car.tesla.values import CANBUS, CruiseButtons
 from opendbc.car.carlog import carlog
+
+
+def init_preap_can(dbc_names, packers):
+  """Set up CAN packers and TeslaCANPreAP for Pre-AP Model S.
+
+  Args:
+    dbc_names: dict of DBC filenames per bus
+    packers: dict of CANPackers (modified in place — adds autopilot_party key)
+
+  Returns:
+    TeslaCANPreAP instance configured for this car
+  """
+  packers[CANBUS.autopilot_party] = CANPacker(dbc_names[Bus.party])
+  pedal_packer = CANPacker("comma_pedal")
+  tesla_can = TeslaCANPreAP(packers, pedal_packer)
+  tesla_can.pedal_can_bus = nap_conf.pedal_can_bus
+  return tesla_can
 
 
 class PreAPLongController:

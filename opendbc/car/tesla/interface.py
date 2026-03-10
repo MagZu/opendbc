@@ -55,8 +55,9 @@ class CarInterface(CarInterfaceBase):
       ret.flags |= TeslaLegacyParams.NO_SDM1.value
 
     if candidate == CAR.TESLA_MODEL_S_PREAP:
-      ret = get_preap_params(ret, fingerprint)
-    elif candidate in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1, ):
+      return get_preap_params(ret, fingerprint)
+
+    if candidate in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1, ):
       ret.safetyConfigs = [
         get_safety_config(structs.CarParams.SafetyModel.teslaLegacy, int(TeslaSafetyFlags.FLAG_HW1)),
       ]
@@ -76,9 +77,7 @@ class CarInterface(CarInterfaceBase):
     ret.steerAtStandstill = True
 
     ret.steerControlType = structs.CarParams.SteerControlType.angle
-    # PREAP sets radarUnavailable from the toggle above; don't overwrite it here.
-    if candidate != CAR.TESLA_MODEL_S_PREAP:
-      ret.radarUnavailable = candidate in (CAR.TESLA_MODEL_S_HW2, )
+    ret.radarUnavailable = candidate in (CAR.TESLA_MODEL_S_HW2, )
 
     # Legacy Tesla ports in this tree run openpilot longitudinal by default
     # (not as an optional alpha toggle), so mark alpha availability false.
@@ -88,8 +87,7 @@ class CarInterface(CarInterfaceBase):
 
     ret.vEgoStopping = 0.1
     ret.vEgoStarting = 0.1
-    # Tinkla uses a stronger stopping decel ramp for Pre-AP.
-    ret.stoppingDecelRate = 1.0 if candidate == CAR.TESLA_MODEL_S_PREAP else 0.3
+    ret.stoppingDecelRate = 0.3
 
     # ret.dashcamOnly = candidate in (CAR.TESLA_MODEL_X) # dashcam only, pending find invalidLkasSetting signal
 

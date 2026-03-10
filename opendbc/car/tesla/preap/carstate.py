@@ -1,16 +1,17 @@
 """
-Pre-AP CarState update — full CAN signal parsing for Pre-AP Model S.
+Pre-AP CarState update and CAN parser config for Pre-AP Model S.
 
-Extracted from carstate.py update_legacy() so upstream changes to the
-AP1+ legacy update path don't conflict with Pre-AP logic.
+Extracted from carstate.py so upstream changes to the AP1+ legacy
+update path and parser config don't conflict with Pre-AP logic.
 """
 import copy
 import math
 import time
 
+from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.tesla.values import GEAR_MAP, STEER_THRESHOLD
+from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.nap_params import NAPParamKeys
 from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_PRESSED
 
@@ -192,3 +193,57 @@ def update_preap(cs, can_parsers):
   ret.pedalLongActive = cs.enableLongControl and nap_conf.use_pedal
 
   return ret
+
+
+def get_preap_can_parsers(CP):
+  """CAN parser configuration for Pre-AP Model S.
+
+  Defines which CAN messages to subscribe to and on which buses.
+  Pre-AP has no DAS ECU, so AP parsers are empty or pointed at Bus 0.
+  Comma Pedal feedback (GAS_SENSOR) uses Bus 2 by default.
+  """
+  # Bus 0 chassis signals
+  chassis_messages = [
+    ("ESP_B", 0),
+    ("BrakeMessage", 0),
+    ("DI_state", 0),
+    ("DI_torque2", 0),
+    ("GTW_carState", 0),
+    ("STW_ANGLHP_STAT", 0),
+    ("EPAS_sysStatus", 0),
+    ("STW_ACTN_RQ", 0),
+    # SDM1 (0x201) excluded — collides with Comma Pedal on Bus 0
+    # RCM_status excluded — not present on Pre-AP, causes timeout
+  ]
+
+  # Bus 0 powertrain signals
+  pt_messages = [
+    ("DI_torque1", 0),
+    ("ESP_B", 0),
+  ]
+
+  # Bus 0 party signals (minimal — keeps parser valid)
+  party_messages = [
+    ("ESP_B", 0),
+  ]
+
+  # Comma Pedal feedback on Bus 2 (or Bus 0 if pedal_can_zero)
+  pedal_can_zero = nap_conf.pedal_can_zero
+  pedal_bus = 0 if pedal_can_zero else 2
+  pedal_messages = [
+    # Optional: don't invalidate CAN health if pedal is absent
+    ("GAS_SENSOR", math.nan),
+  ]
+
+  # Pre-AP has no DAS ECU — AP parsers point at Bus 0 with ESP_B only
+  ap_messages = [
+    ("ESP_B", 0),
+  ]
+
+  return {
+    Bus.party: CANParser(DBC[CP.carFingerprint][Bus.party], party_messages, CANBUS.party),
+    Bus.ap_party: CANParser(DBC[CP.carFingerprint][Bus.party], pedal_messages, pedal_bus),
+    Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, CANBUS.party),
+    Bus.ap_pt: CANParser(DBC[CP.carFingerprint][Bus.pt], [], CANBUS.party),
+    Bus.chassis: CANParser(DBC[CP.carFingerprint][Bus.chassis], chassis_messages, CANBUS.party),
+  }

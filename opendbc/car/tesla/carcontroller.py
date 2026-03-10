@@ -4,11 +4,10 @@ from opendbc.car import Bus
 from opendbc.car.lateral import apply_steer_angle_limits_vm
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.tesla.teslacan import TeslaCAN
-from opendbc.car.tesla.teslacan_legacy import TeslaCANRaven, TeslaCANPreAP
+from opendbc.car.tesla.teslacan_legacy import TeslaCANRaven
 from opendbc.car.tesla.values import CarControllerParams, CANBUS, LEGACY_CARS, CAR
 from opendbc.car.vehicle_model import VehicleModel
-from opendbc.car.tesla.nap_conf import nap_conf
-from opendbc.car.tesla.preap.carcontroller import PreAPLongController
+from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
 
 
 def get_safety_CP():
@@ -39,11 +38,7 @@ class CarController(CarControllerBase):
       self.packers = {CANBUS.party: CANPacker(dbc_names[Bus.party]), CANBUS.powertrain: CANPacker(dbc_names[Bus.pt])}
       
       if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-        self.packers[CANBUS.autopilot_party] = CANPacker(dbc_names[Bus.party])
-        self.pedal_packer = CANPacker("comma_pedal")
-        self.tesla_can = TeslaCANPreAP(self.packers, self.pedal_packer)
-        
-        self.tesla_can.pedal_can_bus = nap_conf.pedal_can_bus
+        self.tesla_can = init_preap_can(dbc_names, self.packers)
       else:
         self.tesla_can = TeslaCANRaven(self.packers)
         

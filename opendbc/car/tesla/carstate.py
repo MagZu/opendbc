@@ -1,5 +1,4 @@
 import copy
-import math
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
@@ -8,7 +7,7 @@ from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR
 from opendbc.car.tesla.nap_conf import nap_conf
 from opendbc.car.tesla.preap.engagement import PreAPEngagement
 from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
-from opendbc.car.tesla.preap.carstate import update_preap
+from opendbc.car.tesla.preap.carstate import update_preap, get_preap_can_parsers
 
 
 class CarState(CarStateBase):
@@ -272,6 +271,9 @@ class CarState(CarStateBase):
 
   @staticmethod
   def get_can_parsers(CP):
+    if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
+      return get_preap_can_parsers(CP)
+
     if CP.carFingerprint in LEGACY_CARS:
       chassis_messages = [
         ("ESP_B", 0),
@@ -283,25 +285,13 @@ class CarState(CarStateBase):
         ("SDM1", 0),
         ("RCM_status", 0),
       ]
-      
+
       if CP.carFingerprint != CAR.TESLA_MODEL_S_HW3:
         chassis_messages.append(("EPAS_sysStatus", 0))
-      
-      if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-        # Remove RCM_status to prevent timeout on Pre-AP
-        chassis_messages = [m for m in chassis_messages if m[0] != "RCM_status"]
-        # Ensure SDM1 is not in the list if it causes conflicts, but we need it for other logic?
-        # Actually, if we hardcoded seatbelt to False, we don't strictly need SDM1 in parser yet.
-        # But if we want to read it, we can keep it if we are sure about the ID.
-        # The user says Pedal is on 0x201. SDM1 is 0x201. This IS a collision on Bus 0.
-        # We must NOT parse SDM1 if the pedal is present on the same bus with the same ID.
-        chassis_messages = [m for m in chassis_messages if m[0] != "SDM1"]
-        # Add STW_ACTN_RQ for buttons
-        chassis_messages.append(("STW_ACTN_RQ", 0))
 
       pt_messages = [
         ("DI_torque1", 0),
-        ("ESP_B", 0), # Ensure pt parser is valid if DI_torque1 is missing
+        ("ESP_B", 0),
       ]
 
       party_messages = [
@@ -310,10 +300,9 @@ class CarState(CarStateBase):
       if CP.carFingerprint == CAR.TESLA_MODEL_S_HW3:
         party_messages.append(("EPAS_sysStatus", 25))
 
-      # Fix for Pre-AP/HW1: Redirect AP parser to Bus 0 so it sees traffic (ESP_B) and becomes valid.
+      # HW1: redirect AP/PT parsers to Bus 0
       pt_bus = CANBUS.powertrain
-      pedal_messages = []
-      if CP.carFingerprint in (CAR.TESLA_MODEL_S_PREAP, CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1):
+      if CP.carFingerprint in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1):
         pt_bus = CANBUS.party
         ap_bus = CANBUS.party
         ap_messages = [
@@ -321,29 +310,6 @@ class CarState(CarStateBase):
           ("DAS_control", 0),
           ("DAS_steeringControl", 0),
         ]
-        # Comma Pedal on Bus 2 for Pre-AP (or Bus 0 if pedal_can_zero)
-        if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-          # These are in comma_pedal.dbc
-          pedal_messages = [
-            # Optional pedal feedback: don't invalidate whole CAN health if missing.
-            ("GAS_SENSOR", math.nan)
-          ]
-          # These are in tesla_can.dbc - Pre-AP doesn't have DAS messages
-          ap_messages = [
-            ("ESP_B", 0),
-          ]
-          # Pedal bus: matches Tinkla get_cam_can_parser() — bus 2 by default, bus 0 if pedal_can_zero
-          pedal_can_zero = nap_conf.pedal_can_zero
-          pedal_bus = 0 if pedal_can_zero else 2
-          ap_bus = CANBUS.party  # Bus 0 for non-pedal AP messages
-        
-        # HW1 with autopilot_disabled (Pre-AP emulation) or genuine HW1
-        # If it's actually a Pre-AP car masquerading as HW1, it won't have DAS messages either
-        # But we should trust the fingerprint unless forced otherwise.
-        # The user specifically mentioned their car fingerprints as HW1 but IS Pre-AP (Legacy)
-        # To handle this safely: if we detect Pre-AP signals or if the user forces it, we might need adjustments.
-        # For now, we stick to the CAR.TESLA_MODEL_S_PREAP check which the user seems to be using/forcing.
-        
       else:
         ap_bus = CANBUS.autopilot_party
         ap_messages = [
@@ -351,24 +317,13 @@ class CarState(CarStateBase):
           ("DAS_steeringControl", 0),
         ]
 
-      if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-        ap_messages = [m for m in ap_messages if m[0] not in ['DAS_control', 'DAS_steeringControl']]
-
-      # For Pre-AP: use pedal_bus for comma_pedal parser (bus 2 by default, bus 0 if pedal_can_zero)
-      # For HW1/others: use ap_bus as before
-      ap_party_bus = pedal_bus if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP else ap_bus
-
       return {
         Bus.party: CANParser(DBC[CP.carFingerprint][Bus.party], party_messages, CANBUS.party),
-        # Pre-AP: use tesla_preap DBC (has GAS_SENSOR at 0x552) NOT comma_pedal (0x201)
-        Bus.ap_party: CANParser(DBC[CP.carFingerprint][Bus.party] if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP else DBC[CP.carFingerprint][Bus.party],
-                                pedal_messages if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP else ap_messages, ap_party_bus),
+        Bus.ap_party: CANParser(DBC[CP.carFingerprint][Bus.party], ap_messages, ap_bus),
         Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, pt_bus),
-        # Pre-AP does not consume ap_pt signals in update_legacy; keep parser empty to
-        # avoid false canValid drops from unnecessary legacy AP/PT expectations.
         Bus.ap_pt: CANParser(
           DBC[CP.carFingerprint][Bus.pt],
-          [] if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP else ap_messages,
+          ap_messages,
           ap_bus if ap_bus == CANBUS.party else CANBUS.autopilot_powertrain
         ),
         Bus.chassis: CANParser(DBC[CP.carFingerprint][Bus.chassis], chassis_messages, CANBUS.chassis if CP.carFingerprint == CAR.TESLA_MODEL_S_HW3 else CANBUS.party),
