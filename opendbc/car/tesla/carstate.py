@@ -1,25 +1,14 @@
 import copy
 import math
-import time
 from opendbc.can import CANDefine, CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
-from opendbc.car.carlog import carlog
-from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR, TeslaLegacyParams, LEGACY_CARS, CruiseButtons
-from opendbc.car.tesla.nap_params import NAPParamKeys
+from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, CAR, TeslaLegacyParams, LEGACY_CARS
 from opendbc.car.tesla.nap_conf import nap_conf
 from opendbc.car.tesla.preap.engagement import PreAPEngagement
 from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
-
-try:
-  from openpilot.common.params import Params as _NAPParams
-  _nap_params = _NAPParams()
-except ImportError:
-  _nap_params = None
-
-def _current_time_millis():
-  return int(round(time.time() * 1000))
+from opendbc.car.tesla.preap.carstate import update_preap
 
 
 class CarState(CarStateBase):
@@ -186,6 +175,9 @@ class CarState(CarStateBase):
     return ret
 
   def update_legacy(self, can_parsers) -> structs.CarState:
+    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
+      return update_preap(self, can_parsers)
+
     cp_party = can_parsers[Bus.party]
     cp_ap_party = can_parsers[Bus.ap_party]
     cp_pt = can_parsers[Bus.pt]
@@ -198,15 +190,11 @@ class CarState(CarStateBase):
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
 
     # Gas pedal
-    # Pre-AP note: using a strict >0 threshold on DI_pedalPos can keep
-    # gas override active and prevent planner longitudinal output.
-    # Tinkla uses a small threshold in DI units for interceptor-based gas.
-    ret.gasPressed = cp_pt.vl["DI_torque1"]["DI_pedalPos"] > PEDAL_DI_PRESSED
+    ret.gasPressed = cp_pt.vl["DI_torque1"]["DI_pedalPos"] > 0
 
     # Brake pedal
     ret.brake = 0
-    real_brake_pressed = cp_chassis.vl["BrakeMessage"]["driverBrakeStatus"] == 2
-    ret.brakePressed = real_brake_pressed
+    ret.brakePressed = cp_chassis.vl["BrakeMessage"]["driverBrakeStatus"] == 2
 
     # Steering wheel
     if self.CP.carFingerprint == CAR.TESLA_MODEL_S_HW3:
@@ -220,64 +208,31 @@ class CarState(CarStateBase):
     ret.steeringTorque = -epas_status["EPAS_torsionBarTorque"]
     # stock handsOnLevel uses >0.5 for 0.25s, but is too slow
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > STEER_THRESHOLD, 5)
-    
+
     eac_status = self.can_defines["EPAS_sysStatus"]["EPAS_eacStatus"].get(int(epas_status["EPAS_eacStatus"]), None)
     ret.steerFaultPermanent = eac_status == "EAC_FAULT"
-    # On Pre-AP, EAC_INHIBITED is the normal EPS idle state (no AP ECU present),
-    # not a real fault.  Mapping it to steerFaultTemporary creates a deadlock:
-    # latActive stays False, so DAS_steeringControlType=0 is sent, so the EPS
-    # never transitions to AVAILABLE/ACTIVE.  Only treat it as a temp fault on
-    # AP1+ cars where INHIBITED indicates an actual problem.
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      ret.steerFaultTemporary = False
-    else:
-      ret.steerFaultTemporary = eac_status == "EAC_INHIBITED"
-  
+    ret.steerFaultTemporary = eac_status == "EAC_INHIBITED"
+
     # FSD disengages using union of handsOnLevel (slow overrides) and high angle rate faults (fast overrides, high speed)
     eac_error_code = self.can_defines["EPAS_sysStatus"]["EPAS_eacErrorCode"].get(int(epas_status["EPAS_eacErrorCode"]), None)
     ret.steeringDisengage = self.hands_on_level >= 3 or (eac_status == "EAC_INHIBITED" and
                                                           eac_error_code == "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY")
-
-    self.engagement.handle_steering_disengage(ret.steeringDisengage)
 
     # Cruise state
     cruise_state = self.can_defines["DI_state"]["DI_cruiseState"].get(int(cp_chassis.vl["DI_state"]["DI_cruiseState"]), None)
     speed_units = self.can_defines["DI_state"]["DI_speedUnits"].get(int(cp_chassis.vl["DI_state"]["DI_speedUnits"]), None)
 
     cruise_enabled = cruise_state in ("ENABLED", "STANDSTILL", "OVERRIDE", "PRE_FAULT", "PRE_CANCEL")
+    ret.cruiseState.enabled = cruise_enabled
+    ret.cruiseState.available = cruise_state == "STANDBY" or ret.cruiseState.enabled
 
-    # Match panda safety cruise engaged logic
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      ret.cruiseState.available = True # Always available on Pre-AP
-      # Enabled logic handled by button events below
-    else:
-      ret.cruiseState.enabled = cruise_enabled
-      ret.cruiseState.available = cruise_state == "STANDBY" or ret.cruiseState.enabled
-
-    # Save speed units for stalk button handling
     if speed_units is not None:
       self.speed_units = speed_units
 
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      if self.enableLongControl and nap_conf.use_pedal:
-        # Pedal mode active: use software-managed target speed (Tinkla PCC_module)
-        ret.cruiseState.speed = self.pedal_speed_kph * CV.KPH_TO_MS
-      else:
-        # Lateral-only, stock cruise fallback, or not engaged: read dashboard speed.
-        # When stock CC is active DI_digitalSpeed shows the set speed;
-        # when CC is off it shows current speed (harmless placeholder).
-        if speed_units == "KPH":
-          ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.KPH_TO_MS, 1e-3)
-        elif speed_units == "MPH":
-          ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.MPH_TO_MS, 1e-3)
-    else:
-      if speed_units == "KPH":
-        ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.KPH_TO_MS, 1e-3)
-      elif speed_units == "MPH":
-        ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.MPH_TO_MS, 1e-3)
-
-    if self.CP.carFingerprint != CAR.TESLA_MODEL_S_PREAP:
-      ret.cruiseState.available = cruise_state == "STANDBY" or ret.cruiseState.enabled
+    if speed_units == "KPH":
+      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.KPH_TO_MS, 1e-3)
+    elif speed_units == "MPH":
+      ret.cruiseState.speed = max(cp_chassis.vl["DI_state"]["DI_digitalSpeed"] * CV.MPH_TO_MS, 1e-3)
 
     ret.cruiseState.standstill = False  # This needs to be false, since we can resume from stop without sending anything special
     ret.standstill = cruise_state == "STANDSTILL"
@@ -297,107 +252,21 @@ class CarState(CarStateBase):
     # Seatbelt
     if self.CP.flags & TeslaLegacyParams.NO_SDM1:
       ret.seatbeltUnlatched = cp_chassis.vl["RCM_status"]["RCM_buckleDriverStatus"] != 1
-    elif self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      # Pre-AP uses SDM1 (0x201), but Comma Pedal is also on 0x201.
-      # To avoid conflict if we can't distinguish, we hardcode for now.
-      # TODO: Implement safe check using message size or bus if possible.
-      # For now, we assume belted to allow engagement for testing.
-      ret.seatbeltUnlatched = False
     else:
       ret.seatbeltUnlatched = cp_chassis.vl["SDM1"]["SDM_bcklDrivStatus"] != 1
 
     # AEB
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      ret.stockAeb = False
-    else:
-      ret.stockAeb = cp_ap_pt.vl["DAS_control"]["DAS_aebEvent"] == 1
+    ret.stockAeb = cp_ap_pt.vl["DAS_control"]["DAS_aebEvent"] == 1
 
     # LKAS
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      ret.stockLkas = False
-    else:
-      ret.stockLkas = cp_ap_party.vl["DAS_steeringControl"]["DAS_steeringControlType"] == 2  # LANE_KEEP_ASSIST
+    ret.stockLkas = cp_ap_party.vl["DAS_steeringControl"]["DAS_steeringControlType"] == 2  # LANE_KEEP_ASSIST
 
     # Stock Autosteer should be off (includes FSD)
     # ret.invalidLkasSetting = cp_ap_party.vl["DAS_settings"]["DAS_autosteerEnabled"] != 0
 
-    # Buttons # ToDo: add Gap adjust button
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      self.prev_cruise_buttons = self.cruise_buttons
-      self.cruise_buttons = int(cp_chassis.vl["STW_ACTN_RQ"]["SpdCtrlLvr_Stat"])
-      # Save full STW_ACTN_RQ message for spoofing cancel commands (Tinkla carstate.py line 432)
-      self.msg_stw_actn_req = copy.copy(cp_chassis.vl["STW_ACTN_RQ"])
-
-      # Read follow distance dial from cruise stalk
-      if _nap_params is not None:
-        dtr_dist = int(cp_chassis.vl["STW_ACTN_RQ"]["DTR_Dist_Rq"])
-        if dtr_dist != 255:  # 255 = SNA (no stalk input)
-          stalk_follow = min((dtr_dist // 33) + 1, 7)
-          if stalk_follow != self.prev_stalk_follow:
-            _nap_params.put(NAPParamKeys.FOLLOW_DISTANCE, stalk_follow)
-            self.prev_stalk_follow = stalk_follow
-
-      curr_time_ms = _current_time_millis()
-      use_pedal = nap_conf.use_pedal
-      pedal_factor = float(nap_conf.pedal_factor)
-      pedal_transform_valid = math.isfinite(pedal_factor) and abs(pedal_factor) > 1e-6
-      pedal_long_allowed = use_pedal and pedal_transform_valid
-      long_control_allowed = (not use_pedal) or pedal_transform_valid
-
-      # Delegate engagement logic to PreAPEngagement module
-      button_events = self.engagement.process_buttons(
-        self.cruise_buttons, self.prev_cruise_buttons, curr_time_ms,
-        ret.vEgo, self.speed_units, use_pedal, pedal_long_allowed,
-        long_control_allowed, real_brake_pressed)
-      # Suppress brakePressed so openpilot's generic brake-disengage path doesn't kill lateral
-      ret.brakePressed = False
-      ret.buttonEvents = button_events
-
-      # Check engagement prerequisites (door, gear, seatbelt)
-      can_engage = self.engagement.check_can_engage(ret.doorOpen, ret.gearShifter, ret.seatbeltUnlatched)
-      ret.cruiseState.enabled = self.engagement.cruiseEnabled and can_engage
-
-      # Bridge engagement state for carcontroller reads
-      self.cruiseEnabled = self.engagement.cruiseEnabled
-      self.enableLongControl = self.engagement.enableLongControl
-      self.enableJustCC = self.engagement.enableJustCC
-      self.pedal_speed_kph = self.engagement.pedal_speed_kph
-      self.longCtrlEvent = self.engagement.longCtrlEvent
-      self.preap_cc_cancel_needed = self.engagement.preap_cc_cancel_needed
-      self.preap_cc_engage_needed = self.engagement.preap_cc_engage_needed
-
-    # ============================================
-    # Comma Pedal Parsing (Pre-AP only)
-    # ============================================
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      curr_time_ms = _current_time_millis()
-      gas_sensor = cp_ap_party.vl.get("GAS_SENSOR", {})
-      self.pedal.update(gas_sensor, curr_time_ms)
-      self.pedal.update_torque(cp_pt.vl.get("DI_torque1", {}))
-
-      # Bridge pedal state for carcontroller reads
-      self.pedal_interceptor_value = self.pedal.interceptor_value
-      self.pedal_timeout = self.pedal.timeout
-
-      # In pedal mode, use interceptor threshold for gas override semantics.
-      # Matches Tinkla behavior: avoids sticky DI_pedalPos > 0 overrides.
-      if nap_conf.use_pedal:
-        ret.gasPressed = self.pedal.gas_pressed
-
     # Messages needed by carcontroller
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
-      self.das_control = None
-    else:
-      self.das_control = copy.copy(cp_ap_pt.vl["DAS_control"])
-
+    self.das_control = copy.copy(cp_ap_pt.vl["DAS_control"])
     self.cruise_enabled_prev = ret.cruiseState.enabled
-
-    # Propagate max regen flag from carcontroller (set in previous frame)
-    ret.pedalMaxRegen = self.pccEvent == "pedalMaxRegen"
-
-    # Expose pedal-specific long control status for selfdrived alerts.
-    # True only when pedal hardware is the longitudinal source (not stock cruise).
-    ret.pedalLongActive = self.enableLongControl and nap_conf.use_pedal
 
     return ret
 
