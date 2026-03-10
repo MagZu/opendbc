@@ -8,6 +8,8 @@ from opendbc.safety.tests.libsafety import libsafety_py
 
 
 class TestTeslaPreAPStalkRearm(unittest.TestCase):
+  TX_MSGS = [[0x488, 0], [0x2B9, 0], [0x214, 0], [0x551, 0], [0x551, 2], [0x45, 0], [0x659, 0]]
+
   def setUp(self):
     self.safety = libsafety_py.libsafety
     flags = int(TeslaSafetyFlags.LONG_CONTROL | TeslaSafetyFlags.FLAG_PREAP)
