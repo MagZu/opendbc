@@ -50,15 +50,10 @@ PEDAL_HYST_GAP = 1.0
 # mph:   0   11   27   44   67   90
 PEDAL_BP = [0., 5., 12., 20., 30., 40.]
 
-PEDAL_PROFILES = {
-  'S60':     [99., 99., 99., 99., 99., 99.],
-  'S85':     [55., 63., 75., 90., 99., 99.],
-  'P85':     [45., 52., 60., 67., 75., 82.],
-  'P85+':    [37., 45., 52., 60., 67., 75.],
-  'Generic': [99., 99., 99., 99., 99., 99.],
-}
-
-PEDAL_V_DEFAULT = PEDAL_PROFILES['P85+']
+# Fixed pedal gain curve. Based on P85 with ~12% bump for more punch,
+# well below S85 where oscillation starts. Same gain for all trims —
+# the motor's torque curve handles the rest.
+PEDAL_MAX_VALUES = [50., 58., 66., 74., 82., 90.]
 
 # Planner acceleration envelopes by personality
 ACCEL_LOOKUP_BP = [0.0, 1.3, 7.5, 15.0, 25.0, 40.0]  # m/s
@@ -69,9 +64,6 @@ ACCEL_MAX_PROFILES = {
 }
 ACCEL_MAX_DEFAULT = ACCEL_MAX_PROFILES['Chill']
 
-_PROFILE_NAMES = list(PEDAL_PROFILES.keys())
-_PROFILE_INDEX_TO_NAME = {i + 1: name for i, name in enumerate(_PROFILE_NAMES[:4])}
-_PROFILE_NAME_TO_INDEX = {name: i for i, name in _PROFILE_INDEX_TO_NAME.items()}
 
 
 def transform_di_to_pedal(val, pedal_zero, pedal_factor):
@@ -299,20 +291,6 @@ class NAPConf:
   def pedal_factor(self, value):
     self._put_param_float(NAPParamKeys.PEDAL_CALIB_FACTOR, 'pedal_calib_factor', value)
 
-  @property
-  def pedal_profile(self):
-    if _PARAMS_AVAILABLE:
-      idx = _params.get(NAPParamKeys.PEDAL_PROFILE, return_default=True)
-      return _PROFILE_INDEX_TO_NAME.get(idx, 'P85+')
-    val = self._get('pedal_profile', 'P85+')
-    return val if val in PEDAL_PROFILES else 'P85+'
-
-  @pedal_profile.setter
-  def pedal_profile(self, value):
-    if value in PEDAL_PROFILES:
-      if _PARAMS_AVAILABLE and value in _PROFILE_NAME_TO_INDEX:
-        _params.put(NAPParamKeys.PEDAL_PROFILE, _PROFILE_NAME_TO_INDEX[value])
-      self._put('pedal_profile', value)
 
   # Utilities
 
@@ -321,7 +299,7 @@ class NAPConf:
     return 0 if self.pedal_can_zero else 2
 
   def get_pedal_profile_values(self):
-    return PEDAL_PROFILES.get(self.pedal_profile, PEDAL_V_DEFAULT)
+    return PEDAL_MAX_VALUES
 
   def get_accel_profile_values(self):
     return ACCEL_MAX_PROFILES.get(self.accel_profile, ACCEL_MAX_DEFAULT)
@@ -353,7 +331,6 @@ class NAPConf:
     print(f"    Pedal Calib Max:      {self.pedal_calib_max:.2f}")
     print(f"    Pedal Zero:           {self.pedal_zero:.3f}")
     print(f"    Pedal Factor:         {self.pedal_factor:.3f}")
-    print(f"    Pedal Profile:        {self.pedal_profile}")
     print(f"    Pedal CAN Bus:        {self.pedal_can_bus}")
     print("")
     print("  [RADAR]")
@@ -375,7 +352,6 @@ class NAPConf:
       'pedal_calib_max': self.pedal_calib_max,
       'pedal_zero': self.pedal_zero,
       'pedal_factor': self.pedal_factor,
-      'pedal_profile': self.pedal_profile,
       'pedal_can_bus': self.pedal_can_bus,
       'pedal_can_zero': self.pedal_can_zero,
       'radar_enabled': self.radar_enabled,
