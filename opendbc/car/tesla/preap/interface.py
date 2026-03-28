@@ -62,7 +62,7 @@ def get_preap_params(ret, fingerprint):
       ret.longitudinalTuning.kf = 1.0
     except AttributeError:
       pass  # kf not available in all capnp schema versions
-    ret.longitudinalActuatorDelay = 0.3
+    ret.longitudinalActuatorDelay = 0.5
   else:
     ret.longitudinalTuning.kpBP = [0.0]
     ret.longitudinalTuning.kpV = [0.0]
