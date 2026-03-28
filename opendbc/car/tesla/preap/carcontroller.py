@@ -80,31 +80,23 @@ class PreAPLongController:
       self.prev_pedal_di = 0.0  # Rate limiter starts from zero on fresh engage
 
     # ==============================================
-    # Pedal Over CC: one-shot CANCEL to keep stock CC unlatched
-    # in pedal mode. Trigger on:
-    #  - requested-long engage edge
-    #  - requested-long disengage edge
-    #  - real stalk press edges for engage/speed change
-    # Do NOT use CC.cruiseControl.cancel directly here, as controlsd
-    # keeps it asserted when pcmCruise is False.
+    # Pedal Over CC: unconditionally cancel stock CC on ANY stalk
+    # interaction when pedal hardware is installed.  Stock "dumb
+    # cruise" must never engage over the pedal — it would fight
+    # the pedal's torque commands and create unpredictable accel.
     # ==============================================
     if pedal_long_allowed:
-      if (not self.prev_requested_long) and requested_long and CS.out.cruiseState.enabled:
+      # Long state transitions
+      if (not self.prev_requested_long) and requested_long:
         self.preap_cancel_pending = True
-      if self.prev_requested_long and (not requested_long) and CS.out.cruiseState.enabled:
+      if self.prev_requested_long and (not requested_long):
         self.preap_cancel_pending = True
 
+      # Any stalk press edge (pull, push, up, down)
       cruise_buttons = getattr(CS, "cruise_buttons", CruiseButtons.IDLE)
       prev_cruise_buttons = getattr(CS, "prev_cruise_buttons", CruiseButtons.IDLE)
-      stalk_press_edge = cruise_buttons != prev_cruise_buttons and cruise_buttons != CruiseButtons.IDLE
-      if stalk_press_edge:
-        pedal_over_cc_button = (
-          cruise_buttons == CruiseButtons.MAIN
-          or CruiseButtons.is_accel(cruise_buttons)
-          or CruiseButtons.is_decel(cruise_buttons)
-        )
-        if pedal_over_cc_button and requested_long and CS.out.cruiseState.enabled:
-          self.preap_cancel_pending = True
+      if cruise_buttons != prev_cruise_buttons and cruise_buttons != CruiseButtons.IDLE:
+        self.preap_cancel_pending = True
 
     if self.preap_cancel_pending and frame % 10 == 0:
       msg_stw = getattr(CS, 'msg_stw_actn_req', None)
