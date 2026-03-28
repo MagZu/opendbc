@@ -1,15 +1,10 @@
-"""
-Tesla Pre-AP Configuration Helper
-Ported from Tinkla's CFG_module.py pattern
-
-Storage Backend: openpilot Params system for NAP-prefixed keys (shared with UI),
-JSON file at /data/nap_params.json for legacy/non-UI params.
-"""
+"""Tesla Pre-AP configuration: pedal calibration, radar, and control mode settings."""
 
 import json
 import os
 import tempfile
 
+from opendbc.car.carlog import carlog
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 
 try:
@@ -19,7 +14,7 @@ try:
 except ImportError:
   _PARAMS_AVAILABLE = False
 
-print(f"[NAP] nap_conf: _PARAMS_AVAILABLE={_PARAMS_AVAILABLE}")
+carlog.info("nap_conf: _PARAMS_AVAILABLE=%s", _PARAMS_AVAILABLE)
 
 
 # ============================================

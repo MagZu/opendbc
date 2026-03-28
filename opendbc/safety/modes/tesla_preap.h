@@ -79,6 +79,7 @@ static void tesla_preap_handle_forwarding(const CANPacket_t *to_fwd) {
       uint32_t RDLR = GET_BYTES_04(to_fwd);
       uint32_t RDHR = GET_BYTES_48(to_fwd);
 
+      // Set country=US (0x100), radar_type=Bosch (0x440), radar position and EPAS type
       RDLR = (RDLR & 0xFFFFF33F) | 0x100 | 0x440;
       RDHR = (RDHR & 0xCFFF0F0F) | 0x10000000 | (radar_position << 4) | (radar_epas_type << 12);
 
@@ -103,7 +104,7 @@ static void tesla_preap_handle_forwarding(const CANPacket_t *to_fwd) {
       uint32_t RDHR = GET_BYTES_48(to_fwd);
 
       to_send.addr = 0x199;
-      // Check if angular speed is SNA (0x3FFF)
+      // Check if angular speed field (bits 29:16) is SNA (0x3FFF)
       if (((RDLR >> 16) & 0xFF3F) == 0xFF3F) {
         // Replace with zero angular change
         RDLR = (RDLR & 0x00C0FFFF) | (0x0020 << 16);
