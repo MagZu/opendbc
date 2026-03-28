@@ -8,7 +8,7 @@ import numpy as np
 
 from opendbc.car import get_safety_config, structs, STD_CARGO_KG
 from opendbc.car.tesla.values import TeslaSafetyFlags
-from opendbc.car.tesla.nap_conf import nap_conf
+from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.constants import (
   ACCEL_PREAP_BP, ACCEL_PREAP_PROFILES,
   PEDAL_LONG_K_BP, PEDAL_LONG_KP_V, PEDAL_LONG_KI_V,

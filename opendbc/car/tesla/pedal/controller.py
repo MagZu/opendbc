@@ -1,6 +1,6 @@
 from numpy import interp, clip
 
-from opendbc.car.tesla.nap_conf import (
+from opendbc.car.tesla.preap.nap_conf import (
   nap_conf,
   PEDAL_DI_MIN, PEDAL_DI_ZERO,
   PEDAL_BP, PEDAL_V_DEFAULT,

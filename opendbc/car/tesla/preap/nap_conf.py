@@ -10,7 +10,7 @@ import json
 import os
 import tempfile
 
-from opendbc.car.tesla.nap_params import NAPParamKeys
+from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 
 try:
   from openpilot.common.params import Params

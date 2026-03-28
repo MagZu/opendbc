@@ -38,7 +38,7 @@ from opendbc.car.tesla.pedal.controller import (
   compute_pedal_command, PEDAL_RAMP_RATE,
 )
 from opendbc.car.tesla.carcontroller import CarController
-from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_MIN as TC_PEDAL_DI_MIN
+from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_MIN as TC_PEDAL_DI_MIN
 
 
 class TestFeedforwardDominantGains(unittest.TestCase):

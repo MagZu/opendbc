@@ -4,7 +4,7 @@ Pre-AP Comma Pedal feedback parser.
 Extracts GAS_SENSOR (0x552) CAN parsing and pedal health tracking from carstate.py.
 Ported from Tinkla's carstate.py pedal interceptor parsing.
 """
-from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_PRESSED
+from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_PRESSED
 
 PEDAL_TIMEOUT_MS = 500
 

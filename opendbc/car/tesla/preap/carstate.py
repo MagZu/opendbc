@@ -12,8 +12,8 @@ from opendbc.can import CANParser
 from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
-from opendbc.car.tesla.nap_params import NAPParamKeys
-from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_PRESSED
+from opendbc.car.tesla.preap.nap_params import NAPParamKeys
+from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_PRESSED
 
 try:
   from openpilot.common.params import Params as _NAPParams

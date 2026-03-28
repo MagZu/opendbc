@@ -5,7 +5,7 @@ from opendbc.car.interfaces import RadarInterfaceBase
 
 # Optional NAP config import (available on device/runtime)
 try:
-  from opendbc.car.tesla.nap_conf import nap_conf
+  from opendbc.car.tesla.preap.nap_conf import nap_conf
 except ImportError:
   nap_conf = None
 
