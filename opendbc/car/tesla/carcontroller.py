@@ -26,9 +26,6 @@ class CarController(CarControllerBase):
 
     # Vehicle model used for lateral limiting
     self.VM = VehicleModel(get_safety_CP())
-    
-    # Pre-AP longitudinal controller (pedal + cruise-over-CC state)
-    self.preap_long = PreAPLongController()
 
     if CP.carFingerprint in LEGACY_CARS:
       if CP.carFingerprint in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1, CAR.TESLA_MODEL_S_PREAP):
@@ -38,6 +35,7 @@ class CarController(CarControllerBase):
       self.packers = {CANBUS.party: CANPacker(dbc_names[Bus.party]), CANBUS.powertrain: CANPacker(dbc_names[Bus.pt])}
       
       if CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
+        self.preap_long = PreAPLongController()
         self.tesla_can = init_preap_can(dbc_names, self.packers)
       else:
         self.tesla_can = TeslaCANRaven(self.packers)

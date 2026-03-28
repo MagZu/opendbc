@@ -11,7 +11,7 @@ from opendbc.can import CANPacker
 from opendbc.car import Bus
 from opendbc.car.tesla.nap_conf import nap_conf, PEDAL_DI_MIN, PEDAL_DI_ZERO
 from opendbc.car.tesla.pedal.controller import compute_pedal_command
-from opendbc.car.tesla.teslacan_legacy import TeslaCANPreAP
+from opendbc.car.tesla.preap.teslacan import TeslaCANPreAP
 from opendbc.car.tesla.values import CANBUS, CruiseButtons
 from opendbc.car.carlog import carlog
 

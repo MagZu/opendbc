@@ -49,28 +49,25 @@ class CarState(CarStateBase):
     self.prev_stalk_follow = 0
     self.speed_units = "MPH"  # Updated from DI_state each frame
 
-    # Pre-AP engagement state machine (double-pull, button handling, brake override)
-    self.engagement = PreAPEngagement(
-      double_pull_enabled=nap_conf.double_pull_enabled,
-      double_pull_window_ms=nap_conf.double_pull_window_ms,
-    )
-    # Bridge attributes: carcontroller reads these via getattr(CS, 'X', default)
-    self.cruiseEnabled = False
-    self.enableLongControl = False
-    self.enableJustCC = False
-    self.pedal_speed_kph = 0.0
-    self.longCtrlEvent = None
-    self.preap_cc_cancel_needed = False
-    self.preap_cc_engage_needed = False
+    # Pre-AP state (only instantiated for Pre-AP cars)
+    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
+      self.engagement = PreAPEngagement(
+        double_pull_enabled=nap_conf.double_pull_enabled,
+        double_pull_window_ms=nap_conf.double_pull_window_ms,
+      )
+      # Bridge attributes: carcontroller reads these via getattr(CS, 'X', default)
+      self.cruiseEnabled = False
+      self.enableLongControl = False
+      self.enableJustCC = False
+      self.pedal_speed_kph = 0.0
+      self.longCtrlEvent = None
+      self.preap_cc_cancel_needed = False
+      self.preap_cc_engage_needed = False
 
-    # Comma Pedal feedback parser
-    self.pedal = PedalFeedback()
-    # Bridge attributes for carcontroller reads via getattr(CS, ...)
-    self.pedal_interceptor_value = 0.0
-    self.pedal_timeout = True
-
-    # Alert event set by carcontroller (pedalMaxRegen), read by carstate
-    self.pccEvent = None
+      self.pedal = PedalFeedback()
+      self.pedal_interceptor_value = 0.0
+      self.pedal_timeout = True
+      self.pccEvent = None
 
   def update_autopark_state(self, autopark_state: str, cruise_enabled: bool):
     autopark_now = autopark_state in ("ACTIVE", "COMPLETE", "SELFPARK_STARTED")
