@@ -69,6 +69,14 @@ class CarState(CarStateBase):
       self.pedal_timeout = True
       self.pccEvent = None
 
+  def update_button_enable(self, buttonEvents):
+    # Pre-AP engagement is managed entirely by the PreAPEngagement FSM.
+    # The base class method triggers on accelCruise/decelCruise release,
+    # which would let up/down stalk engage openpilot independently of our FSM.
+    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP:
+      return False
+    return super().update_button_enable(buttonEvents)
+
   def update_autopark_state(self, autopark_state: str, cruise_enabled: bool):
     autopark_now = autopark_state in ("ACTIVE", "COMPLETE", "SELFPARK_STARTED")
     if autopark_now and not self.autopark_prev and not self.cruise_enabled_prev:
