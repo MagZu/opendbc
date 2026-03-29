@@ -61,9 +61,12 @@ class CarController(CarControllerBase):
       else:
         can_sends.append(self.tesla_can.create_steering_control(self.apply_angle_last, lat_active))
 
-    if self.frame % 10 == 0 and self.CP.carFingerprint not in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1):
-      cntr = (self.frame // 10) % 16
-      can_sends.append(self.tesla_can.create_steering_allowed(cntr))
+    if self.frame % 10 == 0:
+      if self.CP.carFingerprint in LEGACY_CARS and self.CP.carFingerprint not in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1):
+        cntr = (self.frame // 10) % 16
+        can_sends.append(self.tesla_can.create_steering_allowed(cntr))
+      elif self.CP.carFingerprint not in LEGACY_CARS:
+        can_sends.append(self.tesla_can.create_steering_allowed())
 
     # Longitudinal control
     if self.CP.openpilotLongitudinalControl:

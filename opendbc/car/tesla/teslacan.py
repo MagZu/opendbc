@@ -35,6 +35,13 @@ class TeslaCAN:
     }
     return self.packer.make_can_msg("DAS_control", CANBUS.party, values)
 
+  def create_steering_allowed(self):
+    values = {
+      "APS_eacAllow": 1,
+    }
+
+    return self.packer.make_can_msg("APS_eacMonitor", CANBUS.party, values)
+
   def create_epas_control(self, counter, mode):
     values = {
       "GTW_epasControlCounter": counter,
