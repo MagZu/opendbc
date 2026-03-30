@@ -303,14 +303,16 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
   }
 
   // Stalk logic (STW_ACTN_RQ: 0x45)
+  // Only SET controls_allowed on pull-toward-driver (value 2). Do NOT clear on
+  // cancel (value 1) because the CC spoof logic sends fake cancel messages that
+  // echo back and would immediately revoke controls_allowed. The software FSM
+  // handles disengagement; safety relies on gear/door/steering checks to revoke.
   if ((msg->bus == 0U) && (msg->addr == 0x45U)) {
     int ap_lever_position = msg->data[0] & 0x3FU;
-    if (ap_lever_position == 2) { // Pull forward = Enable
+    if (ap_lever_position == 2) { // RWD = Pull toward driver = Enable
       if ((tesla_gear == 4) && !tesla_doors_open) {
         pcm_cruise_check(true);
       }
-    } else if (ap_lever_position == 1) { // Push back = Disable
-      pcm_cruise_check(false);
     }
   }
 }
