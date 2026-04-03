@@ -22,6 +22,10 @@ static int tesla_gear = 4;       // Initialize to Drive (4) to avoid false disab
 static int tesla_gear_prev = 4;  // Track previous gear for edge detection
 static bool tesla_doors_open = false;
 
+// Stalk echo filter: ignore cancel echoes within this window of a spoof or engage
+static uint32_t tesla_last_stalk_engage_us = 0;
+#define TESLA_CANCEL_ECHO_WINDOW_US 600000U  // 600ms
+
 // Radar emulation state
 static int tesla_radar_status = 0;          // 0=unknown, 1=init(0x631), 2=active(0x300)
 static uint32_t tesla_last_radar_signal = 0;
@@ -303,15 +307,20 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
   }
 
   // Stalk logic (STW_ACTN_RQ: 0x45)
-  // Only SET controls_allowed on pull-toward-driver (value 2). Do NOT clear on
-  // cancel (value 1) because the CC spoof logic sends fake cancel messages that
-  // echo back and would immediately revoke controls_allowed. The software FSM
-  // handles disengagement; safety relies on gear/door/steering checks to revoke.
   if ((msg->bus == 0U) && (msg->addr == 0x45U)) {
     int ap_lever_position = msg->data[0] & 0x3FU;
     if (ap_lever_position == 2) { // RWD = Pull toward driver = Enable
       if ((tesla_gear == 4) && !tesla_doors_open) {
         pcm_cruise_check(true);
+        tesla_last_stalk_engage_us = microsecond_timer_get();
+      }
+    } else if (ap_lever_position == 1) { // FWD = Push away = Cancel
+      // Only honor cancel outside the echo window. The CC spoof logic sends
+      // fake cancel messages that echo back within ~300ms. Real driver cancels
+      // happen well outside this window.
+      uint32_t elapsed = microsecond_timer_get() - tesla_last_stalk_engage_us;
+      if (elapsed > TESLA_CANCEL_ECHO_WINDOW_US) {
+        pcm_cruise_check(false);
       }
     }
   }
