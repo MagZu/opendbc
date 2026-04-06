@@ -2,9 +2,13 @@
 import unittest
 
 from opendbc.car.structs import CarParams
-from opendbc.car.tesla.values import CruiseButtons, TeslaSafetyFlags
+from opendbc.car.tesla.values import CruiseButtons
 from opendbc.safety.tests.common import CANPackerSafety
 from opendbc.safety.tests.libsafety import libsafety_py
+
+# Safety param flags matching tesla_preap.h
+PREAP_FLAG_LONG_CONTROL = 1
+PREAP_FLAG_ENABLE_PEDAL = 2
 
 
 class TestTeslaPreAPStalkRearm(unittest.TestCase):
@@ -12,8 +16,8 @@ class TestTeslaPreAPStalkRearm(unittest.TestCase):
 
   def setUp(self):
     self.safety = libsafety_py.libsafety
-    flags = int(TeslaSafetyFlags.LONG_CONTROL | TeslaSafetyFlags.FLAG_PREAP)
-    self.safety.set_safety_hooks(CarParams.SafetyModel.teslaLegacy, flags)
+    flags = PREAP_FLAG_LONG_CONTROL | PREAP_FLAG_ENABLE_PEDAL
+    self.safety.set_safety_hooks(CarParams.SafetyModel.teslaPreap, flags)
     self.safety.init_tests()
     self.packer = CANPackerSafety("tesla_preap")
 
