@@ -13,6 +13,7 @@ PREAP_FLAG_ENABLE_PEDAL = 2
 
 class TestTeslaPreAPStalkRearm(unittest.TestCase):
   TX_MSGS = [[0x488, 0], [0x2B9, 0], [0x214, 0], [0x551, 0], [0x551, 2], [0x45, 0], [0x659, 0]]
+  cnt_epas = 0
 
   def setUp(self):
     self.safety = libsafety_py.libsafety
@@ -33,7 +34,9 @@ class TestTeslaPreAPStalkRearm(unittest.TestCase):
       "EPAS_eacStatus": eac_status,
       "EPAS_eacErrorCode": eac_error_code,
       "EPAS_internalSAS": 0,
+      "EPAS_sysStatusCounter": self.__class__.cnt_epas % 16,
     }
+    self.__class__.cnt_epas += 1
     return self.packer.make_can_msg_safety("EPAS_sysStatus", 0, values)
 
   def _gear_msg(self, gear):
