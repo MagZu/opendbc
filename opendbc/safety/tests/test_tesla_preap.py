@@ -11,6 +11,18 @@ PREAP_FLAG_LONG_CONTROL = 1
 PREAP_FLAG_ENABLE_PEDAL = 2
 
 
+def _fix_epas_checksum(msg):
+  """Compute Tesla byte-sum checksum for EPAS_sysStatus (checksum at byte 7)."""
+  addr, data, bus = msg
+  data = bytearray(data)
+  chk = (addr & 0xFF) + ((addr >> 8) & 0xFF)
+  for i in range(len(data)):
+    if i != 7:
+      chk += data[i]
+  data[7] = chk & 0xFF
+  return addr, bytes(data), bus
+
+
 class TestTeslaPreAPStalkRearm(unittest.TestCase):
   TX_MSGS = [[0x488, 0], [0x2B9, 0], [0x214, 0], [0x551, 0], [0x551, 2], [0x45, 0], [0x659, 0]]
   cnt_epas = 0
@@ -29,15 +41,17 @@ class TestTeslaPreAPStalkRearm(unittest.TestCase):
     return self.packer.make_can_msg_safety("STW_ACTN_RQ", 0, {"SpdCtrlLvr_Stat": lever_position})
 
   def _epas_msg(self, hands_on_level, eac_status=1, eac_error_code=0):
+    counter = self.__class__.cnt_epas % 16
+    self.__class__.cnt_epas += 1
     values = {
       "EPAS_handsOnLevel": hands_on_level,
       "EPAS_eacStatus": eac_status,
       "EPAS_eacErrorCode": eac_error_code,
-      "EPAS_internalSAS": 0,
-      "EPAS_sysStatusCounter": self.__class__.cnt_epas % 16,
+      "EPAS_internalSAS": 8192,
+      "EPAS_sysStatusCounter": counter,
     }
-    self.__class__.cnt_epas += 1
-    return self.packer.make_can_msg_safety("EPAS_sysStatus", 0, values)
+    return self.packer.make_can_msg_safety("EPAS_sysStatus", 0, values,
+                                           fix_checksum=_fix_epas_checksum)
 
   def _gear_msg(self, gear):
     return self.packer.make_can_msg_safety("DI_torque2", 0, {"DI_gear": gear})
@@ -49,25 +63,25 @@ class TestTeslaPreAPStalkRearm(unittest.TestCase):
     self.assertFalse(self.safety.get_controls_allowed())
     self.assertFalse(self.safety.get_cruise_engaged_prev())
 
-    # Keep engage preconditions explicitly valid.
+    # Engage preconditions: gear=drive, doors closed
     self.assertTrue(self._rx(self._gear_msg(4)))
     self.assertTrue(self._rx(self._door_msg_closed()))
 
-    # Initial stalk pull engages controls.
+    # Initial stalk pull engages controls
     self.assertTrue(self._rx(self._stalk_msg(CruiseButtons.MAIN)))
     self.assertTrue(self.safety.get_controls_allowed())
     self.assertTrue(self.safety.get_cruise_engaged_prev())
 
-    # Steering disengage must drop both controls and cruise edge state.
+    # Steering disengage drops controls and cruise edge state
     self.assertTrue(self._rx(self._epas_msg(hands_on_level=3)))
     self.assertFalse(self.safety.get_controls_allowed())
     self.assertFalse(self.safety.get_cruise_engaged_prev())
 
-    # Clear EPAS override signal.
+    # Clear EPAS override
     self.assertTrue(self._rx(self._epas_msg(hands_on_level=0)))
     self.assertFalse(self.safety.get_controls_allowed())
 
-    # Next stalk pull must re-arm controls.
+    # Re-engage via stalk pull
     self.assertTrue(self._rx(self._stalk_msg(CruiseButtons.MAIN)))
     self.assertTrue(self.safety.get_controls_allowed())
     self.assertTrue(self.safety.get_cruise_engaged_prev())
