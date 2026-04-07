@@ -51,10 +51,9 @@ def update_preap(cs, can_parsers):
 
   eac_status = cs.can_defines["EPAS_sysStatus"]["EPAS_eacStatus"].get(int(epas_status["EPAS_eacStatus"]), None)
   ret.steerFaultPermanent = eac_status == "EAC_FAULT"
-  # EAC_INHIBITED is the normal Pre-AP idle state (no AP ECU), not a real fault.
-  # Mapping it to steerFaultTemporary would deadlock: latActive stays False, so the EPS
-  # never transitions to AVAILABLE/ACTIVE.
-  ret.steerFaultTemporary = False
+  # EAC_INHIBITED while engaged means EPAS dropped out of angle control — alert the driver.
+  # When not engaged, EAC_INHIBITED is the normal Pre-AP idle state (no AP ECU).
+  ret.steerFaultTemporary = eac_status == "EAC_INHIBITED" and cs.cruiseEnabled
 
   eac_error_code = cs.can_defines["EPAS_sysStatus"]["EPAS_eacErrorCode"].get(int(epas_status["EPAS_eacErrorCode"]), None)
   ret.steeringDisengage = cs.hands_on_level >= 3 or (eac_status == "EAC_INHIBITED" and
