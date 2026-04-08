@@ -162,7 +162,7 @@ class PreAPEngagement:
     elif state == CruiseButtons.CANCEL:
       # Suppress auto-cancel echoes from our spoofed stalk messages
       is_echo = (
-        (self.enableLongControl and (curr_time_ms - self.last_stalk_non_cancel_ms) < CANCEL_ECHO_WINDOW_MS)
+        (self.cruiseEnabled and (curr_time_ms - self.last_stalk_non_cancel_ms) < CANCEL_ECHO_WINDOW_MS)
         or ((curr_time_ms - self.preap_last_cc_spoof_ms) < SPOOF_ECHO_WINDOW_MS)
       )
       if not is_echo:
