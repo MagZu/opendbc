@@ -11,8 +11,8 @@ except ImportError:
 
 
 class RadarInterface(RadarInterfaceBase):
-  def __init__(self, CP):
-    super().__init__(CP)
+  def __init__(self, CP, CP_SP=None):
+    super().__init__(CP, CP_SP)
     self.CP = CP
 
     self.continental_radar = CP.carFingerprint in (CAR.TESLA_MODEL_S_HW3, )
