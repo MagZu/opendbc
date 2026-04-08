@@ -491,9 +491,13 @@ static safety_config tesla_preap_init(uint16_t param) {
     {0x659, 0, 8, .check_relay = false, .disable_static_blocking = true},  // Pedal state
   };
 
-  // RX checks — validate EPAS counter+checksum, ignore others
+  // RX checks — ignore counter/checksum on all messages.
+  // EPAS validation was causing silent steering dropout after ~21s because
+  // the Tinkla EPAS firmware checksum may differ from our compute_checksum.
+  // When safety rejects EPAS frames, the rx hook doesn't fire, angle stops
+  // updating, and the EPAS times out from lack of valid response.
   static RxCheck preap_rx_checks[] = {
-    {.msg = {{0x370, 0, 8, 25U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},   // EPAS_sysStatus
+    {.msg = {{0x370, 0, 8, 25U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // EPAS_sysStatus
     {.msg = {{0x108, 0, 8, 100U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},  // DI_torque1
     {.msg = {{0x118, 0, 6, 100U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},  // DI_torque2
     {.msg = {{0x20a, 0, 8, 50U, .ignore_quality_flag = true, .ignore_checksum = true, .ignore_counter = true}, { 0 }, { 0 }}},   // BrakeMessage
