@@ -391,26 +391,38 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
 // ============================================
 
 static bool tesla_preap_tx_hook(const CANPacket_t *msg) {
+  // Pre-AP uses breakpoint-based angle rate limiting (matching Tinkla) instead
+  // of steer_angle_cmd_checks_vm() which computes max angle from vehicle model
+  // physics. The _vm version limits to 0.2° at 60mph which blocks highway curves.
+  // Breakpoint rate limits prevent dangerous jerks while allowing any angle a
+  // curve requires. The EPAS also has its own hardware angle/rate limits.
+  const AngleSteeringLimits PREAP_STEERING_LIMITS = {
+    .max_angle = 3600,  // 360 deg, EPAS hardware limit
+    .angle_deg_to_can = 10,
+    .angle_rate_up_lookup = {
+      {0., 5., 15.},         // speed breakpoints (m/s)
+      {100., 16., 3.}        // max rate up (0.1 deg/frame): generous at low speed, tight at highway
+    },
+    .angle_rate_down_lookup = {
+      {0., 5., 15.},
+      {100., 70., 8.}        // max rate down: faster unwinding allowed
+    },
+  };
+
   bool tx = true;
   bool violation = false;
 
   // DAS_steeringControl (0x488)
-  // NOTE: Pre-AP does NOT use steer_angle_cmd_checks_vm(). The vehicle model
-  // angle limits are too restrictive at highway speeds (0.2° max at 60mph)
-  // because the Pre-AP Model S has steer_ratio=15 which maps small curvatures
-  // to very small angles. The Python-side apply_steer_angle_limits_vm() handles
-  // rate limiting. The EPAS itself has hardware angle/rate limits that prevent
-  // dangerous inputs. This matches Tinkla's approach (no panda angle validation).
   if (msg->addr == 0x488U) {
-    int steer_control_type = msg->data[2] >> 6;
-    // Only allow NONE (0) and ANGLE_CONTROL (1)
-    if ((steer_control_type != 0) && (steer_control_type != 1)) {
-      violation = true;
-    }
-    // Still enforce absolute max angle (360°, EPAS hardware limit)
     int raw_angle_can = ((msg->data[0] & 0x7FU) << 8) | msg->data[1];
     int desired_angle = raw_angle_can - 16384;
-    if ((desired_angle > 3600) || (desired_angle < -3600)) {
+    int steer_control_type = msg->data[2] >> 6;
+    bool steer_control_enabled = steer_control_type == 1;
+
+    if (steer_angle_cmd_checks(desired_angle, steer_control_enabled, PREAP_STEERING_LIMITS)) {
+      violation = true;
+    }
+    if ((steer_control_type != 0) && (steer_control_type != 1)) {
       violation = true;
     }
   }
