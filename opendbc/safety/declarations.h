@@ -249,6 +249,9 @@ void speed_mismatch_check(const float speed_2);
 
 void safety_tick(const safety_config *safety_config);
 
+// sunnypilot extended safety param
+extern uint16_t current_safety_param_sp;
+
 // This can be set by the safety hooks
 extern bool controls_allowed;
 extern bool relay_malfunction;
