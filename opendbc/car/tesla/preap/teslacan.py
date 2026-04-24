@@ -17,7 +17,7 @@ _STW_DEFAULTS = {
   "StW_Lvr_Stat": 0, "StW_Cond_Flt": 0, "StW_Cond_Psd": 0,
   "HrnSw_Psd": 0, "StW_Sw00_Psd": 0, "StW_Sw01_Psd": 0,
   "StW_Sw02_Psd": 0, "StW_Sw03_Psd": 0, "StW_Sw04_Psd": 0,
-  "StW_Sw05_Psd": 0, "StW_Sw06_Psd": 0,
+  "StW_Sw05_Psd": 0, "StW_Sw06_Psd": 0, "WprSw6Posn": 0,
 }
 
 
