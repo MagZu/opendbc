@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
   'radar_enabled': False,
   'radar_behind_nosecone': False,
   'radar_offset': 0.0,
+  'road_sign_fallback_kph': 0,
 }
 
 # Pedal DI (Driver Intent) constants — internal representation before calibration
@@ -305,6 +306,30 @@ class NAPConf:
   @pedal_factor.setter
   def pedal_factor(self, value):
     self._put_param_float(NAPParamKeys.PEDAL_CALIB_FACTOR, 'pedal_calib_factor', value)
+
+  @property
+  def road_sign_fallback_kph(self):
+    """Tesla IC road-sign widget fallback when Tesla DI reports SNA (no GPS-fix,
+    no nav-DB hit, parking). Default 0 = no sign shown. Display-only, risk-tier 3."""
+    if _PARAMS_AVAILABLE:
+      try:
+        val = _params.get(NAPParamKeys.ROAD_SIGN_FALLBACK_KPH, return_default=True)
+        return max(0, min(150, int(val))) if val is not None else 0
+      except (TypeError, ValueError):
+        return 0
+      except Exception:
+        pass  # UnknownKeyName for pre-deploy params_pyx → fall through to file
+    return max(0, min(150, int(self._get('road_sign_fallback_kph', 0))))
+
+  @road_sign_fallback_kph.setter
+  def road_sign_fallback_kph(self, value):
+    clipped = max(0, min(150, int(value)))
+    if _PARAMS_AVAILABLE:
+      try:
+        _params.put(NAPParamKeys.ROAD_SIGN_FALLBACK_KPH, clipped)
+      except Exception:
+        pass
+    self._put('road_sign_fallback_kph', clipped)
 
   # Utilities
 
