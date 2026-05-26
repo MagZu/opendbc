@@ -297,9 +297,9 @@ class HUDController:
           DAS_op_status, DAS_collision_warning, DAS_ldwStatus,
           DAS_hands_on_state, DAS_alca_state,
           CS.out.leftBlindspot, CS.out.rightBlindspot,
-          CS.DAS_fusedSpeedLimit, CS.fleet_speed_state, chassis_bus, 1))
+          CS.DAS_fusedSpeedLimit, CS.fleet_speed_state, chassis_bus))
         messages.append(self.tesla_can.create_das_status2(
-          DAS_csaState, cruise_speed, DAS_collision_warning, chassis_bus, 1))
+          DAS_csaState, cruise_speed, DAS_collision_warning, chassis_bus))
 
     self.prev_autopilot_enabled = CS.autopilot_enabled
     if not should_send:

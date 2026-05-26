@@ -158,11 +158,7 @@ class TeslaCANPreAP(TeslaCANRaven):
     return self.packers[CANBUS.party].make_can_msg("DAS_object", bus, values)
 
   def create_body_controls_message(self, turn, hazard, bus, counter):
-    """DAS_bodyControls (0x3E9) — turn signals + hazards for IC, 1Hz.
-
-    NB: Tinkla holder `counter`-argument men hardkoder DAS_bodyControlsCounter=1
-    in body (Tinkla source). Vi følger samme mønster.
-    """
+    """DAS_bodyControls (0x3E9) — turn signals + hazards for IC, 1Hz."""
     values = {
       "DAS_headlightRequest": 0,
       "DAS_hazardLightRequest": 0,
@@ -171,7 +167,7 @@ class TeslaCANPreAP(TeslaCANRaven):
       "DAS_highLowBeamDecision": 3,
       "DAS_highLowBeamOffReason": 5,
       "DAS_turnIndicatorRequestReason": 0,
-      "DAS_bodyControlsCounter": 1,
+      "DAS_bodyControlsCounter": counter,
       "DAS_bodyControlsChecksum": 0,
     }
     values["DAS_hazardLightRequest"] = hazard
@@ -248,8 +244,12 @@ class TeslaCANPreAP(TeslaCANRaven):
   def create_das_status(self, DAS_op_status, DAS_collision_warning,
                          DAS_ldwStatus, DAS_hands_on_state, DAS_alca_state,
                          blindSpotLeft, blindSpotRight,
-                         DAS_speed_limit_kph, DAS_fleetSpeedState, bus, counter):
-    """DAS_status (0x399) — AP-status, blind-spot, fleet-speed for IC, 2Hz."""
+                         DAS_speed_limit_kph, DAS_fleetSpeedState, bus):
+    """DAS_status (0x399) — AP-status, blind-spot, fleet-speed for IC, 2Hz.
+
+    Counter rotates from internal das_status_idx (0-15) — Tinkla holdt
+    konstant 1, vi roterer for å minimere risiko for stale-frame-detect på IC.
+    """
     values = {
       "DAS_autopilotState": DAS_op_status,
       "DAS_blindSpotRearLeft": 1 if blindSpotLeft else 0,
@@ -286,8 +286,12 @@ class TeslaCANPreAP(TeslaCANRaven):
     values["DAS_statusChecksum"] = self.checksum(DAS_STATUS_MSG_ID, data[:7])
     return self.packers[CANBUS.party].make_can_msg("DAS_status", bus, values)
 
-  def create_das_status2(self, DAS_csaState, DAS_acc_speed_limit, fcw, bus, counter):
-    """DAS_status2 (0x389) — CSA-state + ACC-speed-limit + FCW, 2Hz."""
+  def create_das_status2(self, DAS_csaState, DAS_acc_speed_limit, fcw, bus):
+    """DAS_status2 (0x389) — CSA-state + ACC-speed-limit + FCW, 2Hz.
+
+    Counter rotates from internal das_status2_idx (0-15) — Tinkla holdt
+    konstant 1, vi roterer for å minimere risiko for stale-frame-detect på IC.
+    """
     fcw_sig = 0x0F if fcw == 0 else 0x01
     values = {
       "DAS_accSpeedLimit": DAS_acc_speed_limit,

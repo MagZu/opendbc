@@ -319,7 +319,7 @@ class NAPConf:
         return 0
       except Exception:
         pass  # UnknownKeyName for pre-deploy params_pyx → fall through to file
-    return int(self._get('road_sign_fallback_kph', 0))
+    return max(0, min(150, int(self._get('road_sign_fallback_kph', 0))))
 
   @road_sign_fallback_kph.setter
   def road_sign_fallback_kph(self, value):

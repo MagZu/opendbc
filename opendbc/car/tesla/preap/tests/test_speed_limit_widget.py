@@ -8,7 +8,6 @@ Fallback: NAPRoadSignFallbackKph param when Tesla DI reports 0 (SNA / no GPS).
 Pattern ported from Tinkla unified: selfdrive/car/tesla/carstate.py:362.
 """
 import unittest
-from unittest.mock import MagicMock
 
 from opendbc.can import CANPacker, CANParser
 from opendbc.car.tesla.preap.teslacan import TeslaCANPreAP, DAS_STATUS_MSG_ID
@@ -41,7 +40,7 @@ class TestDasStatusFusedSpeedLimitEncoding(unittest.TestCase):
       DAS_hands_on_state=2, DAS_alca_state=1,
       blindSpotLeft=False, blindSpotRight=False,
       DAS_speed_limit_kph=limit_uom, DAS_fleetSpeedState=0,
-      bus=0, counter=1,
+      bus=0,
     )
 
   def test_zero_no_sign(self):
@@ -105,7 +104,8 @@ class TestUiGpsVehicleSpeedParser(unittest.TestCase):
     packer = CANPacker("tesla_preap")
     parser = CANParser("tesla_preap", [("UI_gpsVehicleSpeed", math.nan)], 0)
 
-    # Build a 0x2F8 frame with UI_mppSpeedLimit=16 (raw) → 80 UoM (scale 5)
+    # Build a 0x2F8 frame with UI_mppSpeedLimit=80 (physical UoM) — CANPacker
+    # applies DBC scale 5 so raw bits = 16. Parser decodes back to physical 80.
     msg = packer.make_can_msg("UI_gpsVehicleSpeed", 0, {
       "UI_mppSpeedLimit": 80,
       "UI_mapSpeedLimitUnits": 1,  # 1 = KPH

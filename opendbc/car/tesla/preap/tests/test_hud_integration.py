@@ -151,13 +151,13 @@ class TestTeslaCANIcBuilders(unittest.TestCase):
     self.assertEqual(msg[2], self.bus)
 
   def test_das_status(self):
-    msg = self.tc.create_das_status(2, 0, 0, 2, 1, False, False, 0, 0, self.bus, 1)
+    msg = self.tc.create_das_status(2, 0, 0, 2, 1, False, False, 0, 0, self.bus)
     self.assertEqual(msg[0], DAS_STATUS_MSG_ID)
     self.assertEqual(len(msg[1]), 8)
     self.assertEqual(msg[2], self.bus)
 
   def test_das_status2(self):
-    msg = self.tc.create_das_status2(1, 50.0, 0, self.bus, 1)
+    msg = self.tc.create_das_status2(1, 50.0, 0, self.bus)
     self.assertEqual(msg[0], DAS_STATUS2_MSG_ID)
     self.assertEqual(len(msg[1]), 8)
     self.assertEqual(msg[2], self.bus)
@@ -253,13 +253,14 @@ class TestHUDController(unittest.TestCase):
 
   def test_toggle_off_no_ic_messages(self):
     """When toggle off, only 0x659 (fake_DAS, state-channel) and bodyControls allowed.
-    All IC-rendering frames suppressed."""
+    All IC-rendering frames suppressed across the full 10-tick window."""
     cs = _make_cs(enable_ic=False)
-    # Tick HUD-counter to a known position. The HUD checks IC_integration_counter %10==0
-    # for most frames. We tick 9 times to land on the 10-tick boundary.
+    # Accumulate across all ticks — forbidden frames must not appear on ANY tick,
+    # not just the last (10-tick boundary triggers most-frequent IC frames).
+    all_arb_ids = set()
     for _ in range(10):
       msgs = self._call(cs, frame=0)
-    arb_ids = {m[0] for m in msgs}
+      all_arb_ids.update(m[0] for m in msgs)
     # 0x659 (fake_DAS) IS sent regardless of toggle for PreAP.
     # Other IC arb-IDs MUST NOT appear.
     forbidden = {
@@ -268,8 +269,8 @@ class TestHUDController(unittest.TestCase):
       DAS_STATUS_MSG_ID, DAS_STATUS2_MSG_ID, DAS_TELEMETRY_MSG_ID,
       DAS_CONTROL_MSG_ID,  # Plan C: 0x2B9 also gated on enableICIntegration
     }
-    self.assertEqual(arb_ids & forbidden, set(),
-                     f"IC arb-IDs leaked when toggle off: {arb_ids & forbidden}")
+    self.assertEqual(all_arb_ids & forbidden, set(),
+                     f"IC arb-IDs leaked when toggle off: {all_arb_ids & forbidden}")
 
   def test_toggle_on_sends_das_status_at_10hz(self):
     """When toggle on and counter ticks past a 10-multiple, DAS_status+DAS_status2 must appear."""
@@ -417,19 +418,19 @@ class TestHUDPayloadFromUpstreamData(unittest.TestCase):
     DAS_op_status=5 (active) when enabled, not 1 (UNAVAILABLE)."""
     cs = _make_cs(enable_ic=True)
     cs_state = self._make_selfdrive_state(engageable=True)
-    # Tick to a 10-multiple so DAS_status is emitted.
-    msgs = None
+    # Accumulate DAS_status frames across full 15-tick window. The 10-tick
+    # boundary triggers 0x399 emission; we need at least one in the window.
+    all_status_msgs = []
     for _ in range(15):
       msgs = self._call(cs, enabled=True, controls_state=cs_state)
+      all_status_msgs.extend(m for m in msgs if m[0] == DAS_STATUS_MSG_ID)
     self.assertTrue(self.hc.engageable,
                     "self.engageable not updated from controls_state.selfdriveState.engageable")
-    # DAS_status (0x399) must be in messages
-    status_msgs = [m for m in msgs if m[0] == DAS_STATUS_MSG_ID]
-    # Cannot easily decode without packer in test; just assert it was sent
-    # (op_status=5 verified indirectly via self.engageable propagation above).
-    # Combined with self.engageable=True + enabled=True, hud_module:237
-    # forces DAS_op_status=5 path (not the engageable=False override at 240).
-    self.assertGreater(len(status_msgs) + 100, 0)  # sanity (status sent eventually)
+    # DAS_status (0x399) must be in messages. Combined with self.engageable=True +
+    # enabled=True, hud_module forces DAS_op_status=5 path (not the engageable=False
+    # override). Op_status=5 verified indirectly via self.engageable propagation above.
+    self.assertGreater(len(all_status_msgs), 0,
+                       "DAS_status (0x399) not emitted within 15-tick window")
 
   def test_no_controls_state_keeps_engageable_false(self):
     """Baseline: without controls_state, self.engageable stays False (bug-state)."""
