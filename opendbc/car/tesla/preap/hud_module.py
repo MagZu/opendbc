@@ -27,7 +27,7 @@ Gating: CS.enableICIntegration (NAPTinklaICIntegration param). Default off.
 import numpy as np
 from numpy import clip
 
-from cereal import car
+from opendbc.car import structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import CAR
 
@@ -44,8 +44,8 @@ CAN_CHASSIS = {
 # hindret MITM-pipeline trigger. Reverteret til Tinkla 1:1.
 IC_LANE_SCALE = 0.5
 
-VisualAlert = car.CarControl.HUDControl.VisualAlert
-AudibleAlert = car.CarControl.HUDControl.AudibleAlert
+VisualAlert = structs.CarControl.HUDControl.VisualAlert
+AudibleAlert = structs.CarControl.HUDControl.AudibleAlert
 
 
 def compute_path_pinv(l=50):
