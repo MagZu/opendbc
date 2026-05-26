@@ -158,6 +158,18 @@ def update_preap(cs, can_parsers):
   if nap_conf.use_pedal:
     ret.gasPressed = cs.pedal.gas_pressed
 
+  # Speed-limit for Tesla IC native road-sign widget (0x399 DAS_fusedSpeedLimit).
+  # Tinkla unified pattern (selfdrive/car/tesla/carstate.py:362) for PreAP: read
+  # UI_mppSpeedLimit (raw 0..31, scale 5, so 0..155 in UoM). Tesla IC interprets
+  # units natively, so forward UoM-value as-is. Raw 0 = SNA/UNKNOWN (no GPS-fix,
+  # no nav-DB hit, parking, private road) → fall back to NAPRoadSignFallbackKph
+  # (driver-configurable, default 0 = no sign rendered).
+  speed_limit_uom = float(cp_chassis.vl["UI_gpsVehicleSpeed"].get("UI_mppSpeedLimit", 0.0))
+  if speed_limit_uom > 0:
+    cs.DAS_fusedSpeedLimit = int(speed_limit_uom + 0.5)
+  else:
+    cs.DAS_fusedSpeedLimit = int(nap_conf.road_sign_fallback_kph)
+
   cs.das_control = None
   cs.cruise_enabled_prev = ret.cruiseState.enabled
 
@@ -172,6 +184,11 @@ def update_preap(cs, can_parsers):
   )
   ret.pedalLongActive = cs.enableLongControl and nap_conf.use_pedal
 
+  # Plan C 0x2B9 gate: HUD-module suppresses its own 0x2B9 when MagZu's
+  # long-controller is actively engaged (cruise + long enabled = TX 0x2B9 from
+  # carcontroller_legacy.create_longitudinal_command path). Prevents double-TX.
+  cs.magzu_long_active = bool(cs.cruiseEnabled and cs.enableLongControl)
+
   return ret
 
 
@@ -179,6 +196,10 @@ def get_preap_can_parsers(CP):
   chassis_messages = [
     ("ESP_B", 0), ("BrakeMessage", 0), ("DI_state", 0), ("DI_torque2", 0),
     ("GTW_carState", 0), ("STW_ANGLHP_STAT", 0), ("EPAS_sysStatus", 0), ("STW_ACTN_RQ", 0),
+    # 10 Hz Tesla GPS-based speed-limit broadcast on chassis bus 0; feeds Tesla IC's
+    # native road-sign widget via DAS_fusedSpeedLimit (0x399). math.nan = don't fault
+    # CAN health if msg drops (Tesla DI publishes only when GPS-fix + nav-DB hit).
+    ("UI_gpsVehicleSpeed", math.nan),
   ]
   pt_messages = [("DI_torque1", 0), ("ESP_B", 0)]
   party_messages = [("ESP_B", 0)]

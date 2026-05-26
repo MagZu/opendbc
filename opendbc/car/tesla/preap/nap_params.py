@@ -34,6 +34,15 @@ class NAPParamKeys:
   # Advanced
   FORCE_PRE_AP = "NAPForcePreAP"
 
+  # Tinkla Buddy IC integration — IC-rendering via DAS-frames on chassis bus 0.
+  # Default off. Display-only, risk-tier 3 (Buddy IC does not affect engage or safety).
+  TINKLA_IC_INTEGRATION = "NAPTinklaICIntegration"
+
+  # Tesla IC native road-sign widget fallback (kph). Used when Tesla DI's
+  # UI_gpsVehicleSpeed.UI_mppSpeedLimit reports 0 (no GPS-fix, no nav-DB hit).
+  # Default 0 = no sign shown when no GPS data. Risk-tier 3 (display-only).
+  ROAD_SIGN_FALLBACK_KPH = "NAPRoadSignFallbackKph"
+
 
 # Default values matching params_keys.h declarations
 DEFAULTS = {
@@ -53,4 +62,6 @@ DEFAULTS = {
   NAPParamKeys.IBOOSTER_ENABLED: False,
   NAPParamKeys.BRAKE_FACTOR: 1.0,
   NAPParamKeys.FORCE_PRE_AP: False,
+  NAPParamKeys.TINKLA_IC_INTEGRATION: False,  # Buddy IC-rendering toggle, default off
+  NAPParamKeys.ROAD_SIGN_FALLBACK_KPH: 0,  # 0 = no sign when GPS SNA
 }
