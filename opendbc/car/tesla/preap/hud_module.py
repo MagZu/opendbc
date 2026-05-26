@@ -91,11 +91,11 @@ class HUDController:
     lead_1 = leadsData.leadOne
     lead_2 = leadsData.leadTwo
     if (lead_1 is not None) and lead_1.status:
-      self.leadDx = clip(lead_1.dRel, 0, 126)
-      self.leadDy = clip(curv0 - lead_1.yRel, -22.05, 22.4)
+      self.leadDx = float(clip(lead_1.dRel, 0, 126))
+      self.leadDy = float(clip(curv0 - lead_1.yRel, -22.05, 22.4))
       self.leadId = 1
       self.leadClass = 2
-      self.leadVx = clip(int(lead_1.vRel), -30, 26)
+      self.leadVx = int(clip(int(lead_1.vRel), -30, 26))
     else:
       self.leadDx = 0
       self.leadDy = 0.0
@@ -103,11 +103,11 @@ class HUDController:
       self.leadId = 0
       self.leadVx = 0
     if (lead_2 is not None) and lead_2.status:
-      self.lead2Dx = clip(lead_2.dRel, 0, 126)
-      self.lead2Dy = clip(curv0 - lead_2.yRel, -22.05, 22.4)
+      self.lead2Dx = float(clip(lead_2.dRel, 0, 126))
+      self.lead2Dy = float(clip(curv0 - lead_2.yRel, -22.05, 22.4))
       self.lead2Id = 2
       self.lead2Class = 2
-      self.lead2Vx = clip(int(lead_2.vRel), -30, 26)
+      self.lead2Vx = int(clip(int(lead_2.vRel), -30, 26))
     else:
       self.lead2Dx = 0
       self.lead2Dy = 0.0
@@ -271,13 +271,9 @@ class HUDController:
     if CS.cruiseEnabled:
       v_cruise_pcm = max(0.0, target_speed_kph) * speed_uom_kph
     # Tinkla-paritet (HUD_module.py: `cruise_speed = CS.acc_speed_kph * speed_uom_kph`).
-    # Tidligere DIAGNOSTIC hardkode 80 fjernet — ga ingen IC-effekt fordi Buddy MITM
-    # ikke trigget pga DAS_accState=0 i 0x2B9. Live-sprint 2026-05-25 falsifiserte
-    # hypotesen at acc_speed_limit alene styrer MAX-widget.
-    cruise_speed = target_speed_kph * CV.KPH_TO_MPH
-    DAS_control_speed = v_cruise_pcm
-    if CS.carNotInDrive:
-      DAS_control_speed = 350.0 / 3.6
+    # Bruk samme speed_uom_kph-faktor som v_cruise_pcm slik at MPH-displays
+    # ikke får dobbel-konvertering.
+    cruise_speed = target_speed_kph * speed_uom_kph
     if self.engageable and (not enabled) and cruise_speed == 0:
       cruise_speed = 10
 
