@@ -123,8 +123,8 @@ class RadarInterface(RadarInterfaceBase):
     super().__init__(CP)
     self.CP = CP
 
-    self.continental_radar = CP.carFingerprint in (CAR.TESLA_MODEL_S_HW3, )
-    self.bosch_radar = CP.carFingerprint in (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1, CAR.TESLA_MODEL_S_HW2, CAR.TESLA_MODEL_S_PREAP)
+    self.continental_radar = False
+    self.bosch_radar = CP.carFingerprint == CAR.TESLA_MODEL_S_PREAP
 
     messages = []
     if self.continental_radar:

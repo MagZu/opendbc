@@ -50,10 +50,10 @@ def _fix_das_checksum(msg):
 def _get_preap_vm():
   """VehicleModel matching PREAP_STEERING_PARAMS in tesla_preap.h.
 
-  Built from HW3/Pre-AP CarSpecs directly so this file does not import
+  Built from Pre-AP CarSpecs directly so this file does not import
   tesla.interface (sunnypilot's CarInterfaceBase pulls Pre-AP boot).
   """
-  specs = CAR.TESLA_MODEL_S_HW3.config.specs
+  specs = CAR.TESLA_MODEL_S_PREAP.config.specs
   CP = CarParams()
   CP.mass = specs.mass + STD_CARGO_KG
   CP.wheelbase = specs.wheelbase

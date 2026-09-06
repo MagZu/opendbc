@@ -67,46 +67,6 @@ class CAR(Platforms):
     [TeslaCarHW4ModelSXDocs("Tesla Model X (with HW4) 2024")],
     CarSpecs(mass=2495., wheelbase=2.960, steerRatio=12.0),
   )
-  TESLA_MODEL_X_HW1 = TeslaPlatformConfig(
-    [CarDocs("Tesla Model X (with HW1) 2014-16", "All", car_parts=CarParts.common([CarHarness.tesla_model_x_hw1]))],
-    CarSpecs(mass=2447., wheelbase=2.960, steerRatio=15.0),
-    {
-      Bus.chassis: 'tesla_can',
-      Bus.party: 'tesla_can',
-      Bus.pt: 'tesla_can',
-      Bus.radar: 'tesla_radar_bosch_generated',
-    },
-  )
-  TESLA_MODEL_S_HW1 = TeslaPlatformConfig(
-    [CarDocs("Tesla Model S (with HW1) 2014-16", "All", car_parts=CarParts.common([CarHarness.tesla_model_s_hw1]))],
-    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
-    {
-      Bus.chassis: 'tesla_can',
-      Bus.party: 'tesla_can',
-      Bus.pt: 'tesla_can',
-      Bus.radar: 'tesla_radar_bosch_generated',
-    },
-  )
-  TESLA_MODEL_S_HW2 = TeslaPlatformConfig(
-    [CarDocs("Tesla Model S (with HW2) 2017-19", "All", car_parts=CarParts.common([CarHarness.tesla_model_sx_hw2]))],
-    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
-    {
-      Bus.chassis: 'tesla_can',
-      Bus.party: 'tesla_can',
-      Bus.pt: 'tesla_powertrain',
-      Bus.radar: 'tesla_radar_bosch_generated',
-    },
-  )
-  TESLA_MODEL_S_HW3 = TeslaPlatformConfig(
-    [CarDocs("Tesla Model S (with HW3) 2020-23", "All", car_parts=CarParts.common([CarHarness.tesla_model_sx_hw3]))],
-    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
-    {
-      Bus.chassis: 'tesla_can',
-      Bus.party: 'tesla_raven_party',
-      Bus.pt: 'tesla_powertrain',
-      Bus.radar: 'tesla_radar_continental_generated',
-    },
-  )
   TESLA_MODEL_S_PREAP = TeslaPlatformConfig(
     [CarDocs("Tesla Model S (Pre-AP) 2012-14", "All", car_parts=CarParts.common([CarHarness.tesla_model_s_hw1]))],
     CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
@@ -244,5 +204,3 @@ STALK_DOUBLE_PULL_MS = 750
 DBC = CAR.create_dbc_map()
 
 STEER_THRESHOLD = 1
-
-LEGACY_CARS = (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_S_HW2, CAR.TESLA_MODEL_S_HW3, CAR.TESLA_MODEL_X_HW1, CAR.TESLA_MODEL_S_PREAP)
