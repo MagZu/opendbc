@@ -39,7 +39,7 @@
 // ALL ACTUAL SAFETY CHECKS REMAIN FULLY ACTIVE:
 //   - Steering angle + rate limits via steer_angle_cmd_checks_vm()
 //   - controls_allowed gating on all TX
-//   - Disengage on hands-on override (level >= 2)
+//   - Hands-on level >= 2: default full disengage; pause (bit 8) inhibits lat only
 //   - Disengage on EPAS error codes 6-9
 //   - Disengage on door open, gear out of Drive
 //   - Disengage on stalk cancel (with 600ms echo filter)
@@ -611,9 +611,10 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
     preap_hands_on_level = hands_on_level;
     const bool hands_on = hands_on_level >= PREAP_HANDS_ON_DISENGAGE_LEVEL;
     if (preap_hands_on_pause && !eac_fault && !epas_rejecting && hands_on && controls_allowed_lateral) {
+      // Pause lat only. Keep already-active long; do not pcm_cruise_check(false)
+      // and do not admit a new long request while inhibited.
       steering_control_inhibited = true;
       preap_hands_on_clear_timing = false;
-      pcm_cruise_check(false);
       steering_disengage = false;
     } else if (epas_rejecting || eac_fault || (hands_on && !preap_hands_on_pause)) {
       steering_disengage = true;
@@ -706,13 +707,20 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
     }
   }
 
-  // Stalk engagement (STW_ACTN_RQ: 0x45) with echo-filtered cancel
+  // Stalk engagement (STW_ACTN_RQ: 0x45) with echo-filtered cancel.
+  // pcm_cruise_check latches only on a rising cruise_engaged_prev. Board
+  // heartbeat can drop controls_allowed after 3s of lat-only without clearing
+  // that prev, so a later held lever==2 would not re-admit. Force a rising
+  // edge only on a release-to-pull; held MAIN and inhibit/hands recovery
+  // alone must not rearm. Reuses cruise_button_prev (IDLE=0) for the edge.
   if (msg->addr == 0x45U) {
     int lever = msg->data[0] & 0x3FU;
+    const bool fresh_pull = (lever == 2) && (cruise_button_prev != 2);
     if (lever == 2) {  // RWD = pull toward driver = enable
-      if ((preap_gear == 4) && !preap_doors_open &&
+      if (fresh_pull && (preap_gear == 4) && !preap_doors_open &&
           (preap_hands_on_level < PREAP_HANDS_ON_DISENGAGE_LEVEL) &&
           !steering_control_inhibited) {
+        cruise_engaged_prev = false;
         pcm_cruise_check(true);
         preap_last_stalk_engage_us = microsecond_timer_get();
       }
@@ -723,6 +731,7 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
         tesla_preap_mads_exit(MADS_DISENGAGE_REASON_BUTTON);
       }
     }
+    cruise_button_prev = lever;
   }
 
   // No relay, so stock_ecu_check never runs. Stalk pull's controls_allowed

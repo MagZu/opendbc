@@ -18,7 +18,8 @@ PREAP_FLAG_HANDS_ON_PAUSE = 8
 PREAP_FLAG_PEDAL_BUS_ZERO = 1 << 5
 PREAP_FLAG_PEDAL_CALIBRATION = 1 << 6
 
-# Stalk lever positions from tesla_preap.h
+# Stalk lever positions from tesla_preap.h / tesla_preap.dbc
+STALK_IDLE = 0
 STALK_FWD_CANCEL = 1
 STALK_RWD_ENGAGE = 2
 
@@ -177,6 +178,17 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     """Engage via stalk and advance timer past the 600ms echo filter window."""
     self._rx(self._pcm_status_msg(True))
     self.safety.set_timer(700000)
+
+  def _stalk_lever(self, lever):
+    return self.packer.make_can_msg_safety("STW_ACTN_RQ", 0, {"SpdCtrlLvr_Stat": lever})
+
+  def _model_board_heartbeat_long_timeout(self):
+    # panda/board/main.c 1Hz: 3 ticks of controls_allowed && !heartbeat_engaged
+    # sets controls_allowed=false and does not clear cruise_engaged_prev.
+    # libsafety does not run that countdown; apply the resulting state.
+    self.assertTrue(self.safety.get_controls_allowed())
+    self.assertTrue(self.safety.get_cruise_engaged_prev())
+    self.safety.set_controls_allowed(False)
 
   # =====================================================================
   # Base class overrides for Pre-AP differences
@@ -406,6 +418,25 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self.assertFalse(self.safety.get_cruise_engaged_prev())
     self._rx(self._angle_meas_msg(0, hands_on_level=0))
     self.assertFalse(self.safety.get_controls_allowed())
+    # Held MAIN after hands recovery must not rearm.
+    self._rx(self._pcm_status_msg(True))
+    self.assertFalse(self.safety.get_controls_allowed())
+    self._rx(self._stalk_lever(STALK_IDLE))
+    self._rx(self._pcm_status_msg(True))
+    self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_fresh_pull_rearms_after_heartbeat_stale_prev(self):
+    self._rx(self._pcm_status_msg(True))
+    self._model_board_heartbeat_long_timeout()
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertTrue(self.safety.get_cruise_engaged_prev())
+    # Held lever==2 must not rearm.
+    self._rx(self._pcm_status_msg(True))
+    self._rx(self._pcm_status_msg(True))
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertTrue(self.safety.get_cruise_engaged_prev())
+    self._rx(self._stalk_lever(STALK_IDLE))
+    self.assertFalse(self.safety.get_controls_allowed())
     self._rx(self._pcm_status_msg(True))
     self.assertTrue(self.safety.get_controls_allowed())
 
@@ -584,6 +615,18 @@ class TestTeslaPreAPWithPedal(TeslaPreAPTestMixin, unittest.TestCase):
     self.safety.set_controls_allowed_lateral(True)
     msg = self.packer.make_can_msg_safety("GAS_COMMAND", 0, {"GAS_COMMAND": 0, "ENABLE": 1})
     self.assertFalse(self._tx(msg))
+
+  def test_pedal_tx_after_heartbeat_stale_prev_fresh_pull(self):
+    enable_msg = self.packer.make_can_msg_safety("GAS_COMMAND", 0, {"GAS_COMMAND": 0, "ENABLE": 1})
+    self._rx(self._pcm_status_msg(True))
+    self.assertTrue(self._tx(enable_msg))
+    self._model_board_heartbeat_long_timeout()
+    self.assertFalse(self._tx(enable_msg))
+    self._rx(self._pcm_status_msg(True))
+    self.assertFalse(self._tx(enable_msg))
+    self._rx(self._stalk_lever(STALK_IDLE))
+    self._rx(self._pcm_status_msg(True))
+    self.assertTrue(self._tx(enable_msg))
 
   def test_pedal_gas_detection_bus_0(self):
     # Verify pedal gas detection works on bus 0 (first wiring config).
@@ -901,6 +944,12 @@ class TestTeslaPreAPHandsOnPause(unittest.TestCase):
     lever = STALK_RWD_ENGAGE if enable else STALK_FWD_CANCEL
     return self.packer.make_can_msg_safety("STW_ACTN_RQ", 0, {"SpdCtrlLvr_Stat": lever})
 
+  def _idle(self):
+    return self.packer.make_can_msg_safety("STW_ACTN_RQ", 0, {"SpdCtrlLvr_Stat": STALK_IDLE})
+
+  def _gas_enable(self):
+    return self.packer.make_can_msg_safety("GAS_COMMAND", 0, {"GAS_COMMAND": 0, "ENABLE": 1})
+
   def test_default_off_hands_on_exits(self):
     self._init(0)
     self.safety.set_controls_allowed_lateral(True)
@@ -993,6 +1042,75 @@ class TestTeslaPreAPHandsOnPause(unittest.TestCase):
     self._rx(self._epas(hands=2, eac_status=0, eac_error=6))
     self.assertFalse(self.safety.get_steering_control_inhibited())
     self.assertFalse(self.safety.get_controls_allowed_lateral())
+
+  def test_pause_keeps_active_pedal_tx_and_blocks_enabled_steer(self):
+    self._init(PREAP_FLAG_HANDS_ON_PAUSE | PREAP_FLAG_ENABLE_PEDAL)
+    self._rx(self._stalk(True))
+    self.safety.set_controls_allowed_lateral(True)
+    self.assertTrue(self._tx(self._gas_enable()))
+    self._rx(self._epas(hands=2))
+    self.assertTrue(self.safety.get_steering_control_inhibited())
+    self.assertTrue(self._tx(self._gas_enable()))
+    self.assertFalse(self._tx(self._steer(True)))
+    self.assertTrue(self._tx(self._steer(False)))
+
+  def test_pause_does_not_start_inactive_long_or_pedal_tx(self):
+    self._init(PREAP_FLAG_HANDS_ON_PAUSE | PREAP_FLAG_ENABLE_PEDAL)
+    self.safety.set_controls_allowed(False)
+    self.safety.set_controls_allowed_lateral(True)
+    self._rx(self._epas(hands=2))
+    self.assertTrue(self.safety.get_steering_control_inhibited())
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self._tx(self._gas_enable()))
+    self.assertFalse(self._tx(self._steer(True)))
+    self._rx(self._idle())
+    self._rx(self._stalk(True))
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self._tx(self._gas_enable()))
+    self.safety.set_timer(0)
+    self._rx(self._epas(hands=0))
+    self.safety.set_timer(1000000)
+    self._rx(self._epas(hands=0))
+    self.assertFalse(self.safety.get_steering_control_inhibited())
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self._tx(self._gas_enable()))
+
+  def test_default_off_hands_on_drops_pedal_tx(self):
+    self._init(PREAP_FLAG_ENABLE_PEDAL)
+    self._rx(self._stalk(True))
+    self.safety.set_controls_allowed_lateral(True)
+    self.assertTrue(self._tx(self._gas_enable()))
+    self._rx(self._epas(hands=2))
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self.safety.get_controls_allowed_lateral())
+    self.assertFalse(self._tx(self._gas_enable()))
+    self.assertFalse(self._tx(self._steer(True)))
+
+  def test_pause_epas6_drops_active_pedal_tx(self):
+    self._init(PREAP_FLAG_HANDS_ON_PAUSE | PREAP_FLAG_ENABLE_PEDAL)
+    self._rx(self._stalk(True))
+    self.safety.set_controls_allowed_lateral(True)
+    self._rx(self._epas(hands=2))
+    self.assertTrue(self._tx(self._gas_enable()))
+    self._rx(self._epas(hands=2, eac_status=0, eac_error=6))
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self.safety.get_controls_allowed_lateral())
+    self.assertFalse(self._tx(self._gas_enable()))
+    self.assertFalse(self._tx(self._steer(True)))
+
+  def test_pause_fresh_pull_rearms_after_heartbeat_stale_prev(self):
+    self._init(PREAP_FLAG_HANDS_ON_PAUSE | PREAP_FLAG_ENABLE_PEDAL)
+    self._rx(self._stalk(True))
+    self.assertTrue(self._tx(self._gas_enable()))
+    # Board heartbeat withdrawal: libsafety does not run the 1Hz countdown.
+    self.safety.set_controls_allowed(False)
+    self.assertTrue(self.safety.get_cruise_engaged_prev())
+    self.assertFalse(self._tx(self._gas_enable()))
+    self._rx(self._stalk(True))
+    self.assertFalse(self._tx(self._gas_enable()))
+    self._rx(self._idle())
+    self._rx(self._stalk(True))
+    self.assertTrue(self._tx(self._gas_enable()))
 
 
 if __name__ == "__main__":

@@ -8,9 +8,13 @@ from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
 from opendbc.car.tesla.preap.carstate import HANDS_ON_DISENGAGE_LEVEL
 from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
-from opendbc.car.tesla.values import CANBUS, DBC
+from opendbc.car.tesla.values import CANBUS, DBC, CruiseButtons
 
 ButtonType = structs.CarState.ButtonEvent.Type
+
+# Match panda PREAP_HANDS_ON_RESUME_US. Host pull admission stays closed
+# for this hold after hands clear; a held MAIN is not an edge on expiry.
+PREAP_HANDS_ON_RESUME_MS = 1000
 
 # NAP update_preap writes ret.brake = 0. Sunnypilot grouped brake @5 under
 # CarState.deprecated (comma #3338); Honda already writes ret.deprecated.brake.
@@ -107,10 +111,14 @@ class PreAPCarState(CarStateBase):
     self._latched_longitudinal = structs.CarStateSP.PreapLongitudinalIntent.none
     self._orig_handle_steering_disengage = self.engagement.handle_steering_disengage
     self.engagement.handle_steering_disengage = self._handle_steering_disengage
+    self._orig_process_buttons = self.engagement.process_buttons
+    self.engagement.process_buttons = self._process_buttons
     self._epas_hands = 0
     self._epas_rejecting = False
     self._epas_fault = False
-    self._pause_cancel_this_tick = False
+    self._pull_inhibit = False
+    self._pull_inhibit_clear_timing = False
+    self._pull_inhibit_clear_ts_ms = 0
 
   def update_button_enable(self, buttonEvents):
     return False
@@ -118,40 +126,96 @@ class PreAPCarState(CarStateBase):
   def _pause_effective(self) -> bool:
     return bool(int(getattr(self.CP_SP, "flags", 0) or 0) & int(TeslaFlagsSP.PREAP_HANDS_ON_PAUSE))
 
+  def _hands_on_pause_gate(self) -> bool:
+    return (
+      self._pause_effective()
+      and self._epas_hands >= HANDS_ON_DISENGAGE_LEVEL
+      and not self._epas_rejecting
+      and not self._epas_fault
+    )
+
+  def _clear_unadmitted_pull_state(self) -> None:
+    self.engagement.pending_enable = False
+    self.engagement.stalk_pull_time_ms = 0
+    self.engagement.prev_stalk_pull_time_ms = -1000
+    self.engagement.pending_cancel_at_ms = 0
+
+  def _reset_pull_inhibit(self) -> None:
+    self._pull_inhibit = False
+    self._pull_inhibit_clear_timing = False
+    self._pull_inhibit_clear_ts_ms = 0
+
+  def _update_pull_inhibit(self, now_ms: int) -> None:
+    if not self._pause_effective() or self._epas_rejecting or self._epas_fault:
+      self._reset_pull_inhibit()
+      return
+
+    if self._epas_hands >= HANDS_ON_DISENGAGE_LEVEL:
+      self._pull_inhibit = True
+      self._pull_inhibit_clear_timing = False
+      return
+
+    if not self._pull_inhibit:
+      return
+
+    if not self._pull_inhibit_clear_timing:
+      self._pull_inhibit_clear_timing = True
+      self._pull_inhibit_clear_ts_ms = now_ms
+      return
+
+    if now_ms - self._pull_inhibit_clear_ts_ms >= PREAP_HANDS_ON_RESUME_MS:
+      self._reset_pull_inhibit()
+
+  def _process_buttons(self, cruise_buttons, prev_cruise_buttons, curr_time_ms=0, *args, **kwargs):
+    self._update_pull_inhibit(int(curr_time_ms or 0))
+    rising_main = (
+      cruise_buttons == CruiseButtons.MAIN
+      and prev_cruise_buttons != CruiseButtons.MAIN
+    )
+    # Panda rejects lever==2 while inhibited, including the 1s resume hold.
+    # Swallow the host edge, drop stale pending/double-pull state, and leave
+    # an already-active pedal target alone. Held MAIN must not become an
+    # edge when the hold expires.
+    if self._pull_inhibit or self._hands_on_pause_gate():
+      if rising_main:
+        cruise_buttons = prev_cruise_buttons
+      self._clear_unadmitted_pull_state()
+    return self._orig_process_buttons(cruise_buttons, prev_cruise_buttons, curr_time_ms, *args, **kwargs)
+
   def _handle_steering_disengage(self, steering_disengage):
     if self._epas_rejecting or self._epas_fault:
+      self._reset_pull_inhibit()
       if steering_disengage:
         self.engagement.prev_steering_disengage = False
       self._orig_handle_steering_disengage(steering_disengage)
       return
 
-    hands_on_only = (
-      self._pause_effective()
-      and self._epas_hands >= HANDS_ON_DISENGAGE_LEVEL
-    )
-    if hands_on_only:
+    if self._hands_on_pause_gate():
       if steering_disengage and not self.engagement.prev_steering_disengage:
-        if self.engagement.cruiseEnabled:
-          self.engagement.enableLongControl = False
-          self.engagement.enableJustCC = False
-          self._pause_cancel_this_tick = True
+        # Pause lateral only. Keep already-active healthy pedal cruise.
+        self._clear_unadmitted_pull_state()
       self.engagement.prev_steering_disengage = steering_disengage
       return
+    if not self._pause_effective():
+      self._reset_pull_inhibit()
     self._orig_handle_steering_disengage(steering_disengage)
 
   def _revoke_unadmitted_held_hands(self, ret: structs.CarState) -> None:
     self.engagement.cruiseEnabled = False
     self.engagement.enableLongControl = False
     self.engagement.enableJustCC = False
-    self.engagement.pending_enable = False
     self.engagement.preap_cc_cancel_needed = False
     self.engagement.preap_cc_engage_needed = False
+    self.engagement.pedal_speed_kph = 0.0
+    self._clear_unadmitted_pull_state()
     self.cruiseEnabled = False
     self.enableLongControl = False
     self.enableJustCC = False
     self.preap_cc_cancel_needed = False
     self.preap_cc_engage_needed = False
+    self.pedal_speed_kph = 0.0
     ret.cruiseState.enabled = False
+    ret.enableLongControl = False
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.CarStateSP]:
     epas = can_parsers[Bus.chassis].vl["EPAS_sysStatus"]
@@ -163,7 +227,6 @@ class PreAPCarState(CarStateBase):
       "EAC_ERROR_HIGH_ANGLE_REQ", "EAC_ERROR_HIGH_ANGLE_RATE_REQ",
       "EAC_ERROR_HIGH_ANGLE_SAFETY", "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY",
     )
-    self._pause_cancel_this_tick = False
     cruise_before = bool(self.engagement.cruiseEnabled)
     structs.CarState = _DeprecatedCarStateForwarder
     try:
@@ -172,19 +235,12 @@ class PreAPCarState(CarStateBase):
       structs.CarState = _REAL_CAR_STATE
     if isinstance(ret, _DeprecatedCarStateForwarder):
       ret = ret.unwrap()
-    if self._pause_cancel_this_tick:
-      self.engagement.enableJustCC = False
-      self.enableJustCC = False
-      self.preap_cc_cancel_needed = True
-    unadmitted_held = (
-      (not cruise_before)
-      and self._pause_effective()
-      and self._epas_hands >= HANDS_ON_DISENGAGE_LEVEL
-      and not self._epas_rejecting
-      and not self._epas_fault
-    )
+    unadmitted_held = (not cruise_before) and self._hands_on_pause_gate()
     if unadmitted_held:
       self._revoke_unadmitted_held_hands(ret)
+    if self._hands_on_pause_gate():
+      # Match panda: hands-only pause is not a host steeringDisengage.
+      ret.steeringDisengage = False
     ret.brakePressed = bool(self.real_brake_pressed)
     ret.handsOnLevel = int(self.hands_on_level)
     ret_sp = structs.CarStateSP()
