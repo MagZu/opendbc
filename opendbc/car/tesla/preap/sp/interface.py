@@ -1,5 +1,10 @@
 from opendbc.car import structs
 from opendbc.car.tesla.preap import interface as nap_interface
+from opendbc.car.tesla.preap.constants import (
+  HANDS_ON_DISENGAGE_LEVEL_DEFAULT,
+  HANDS_ON_LEVEL_SHIFT,
+  parse_hands_on_level_param,
+)
 from opendbc.car.tesla.preap.interface import get_preap_accel_limits
 from opendbc.car.tesla.preap.sp.platform import PREAP_PLATFORM, is_preap_platform
 from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
@@ -40,16 +45,27 @@ class _CapnpSink:
         raise
 
 
+def _pack_hands_on_level(level: int) -> int:
+  if level == HANDS_ON_DISENGAGE_LEVEL_DEFAULT:
+    return 0
+  return int(level) << HANDS_ON_LEVEL_SHIFT
+
+
 def get_preap_params(ret, fingerprint):
   nap_interface.get_preap_params(_CapnpSink(ret), fingerprint)
   pause = False
+  level = HANDS_ON_DISENGAGE_LEVEL_DEFAULT
   try:
     from openpilot.common.params import Params
-    pause = bool(Params().get_bool("TeslaPreapHandsOnPause"))
+    params = Params()
+    pause = bool(params.get_bool("TeslaPreapHandsOnPause"))
+    level = parse_hands_on_level_param(params.get("TeslaPreapHandsOnLevel"))
   except Exception:
     pause = False
+    level = HANDS_ON_DISENGAGE_LEVEL_DEFAULT
   if pause and ret.safetyConfigs:
     ret.safetyConfigs[0].safetyParam |= PREAP_FLAG_HANDS_ON_PAUSE
+    ret.safetyConfigs[0].safetyParam |= _pack_hands_on_level(level)
   return ret
 
 

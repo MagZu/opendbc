@@ -26,3 +26,63 @@ def test_saved_pedal_and_radar_params_produce_safety_param_3():
   assert int(ret.safetyConfigs[0].safetyParam) == 3
   assert ret.openpilotLongitudinalControl
   assert not ret.pcmCruise
+
+
+def test_hands_on_pause_packs_legacy_level_two_without_level_bits():
+  from opendbc.car.tesla.preap.constants import get_hands_on_disengage_level
+
+  params = Params()
+  params.put_bool("TeslaPreapHandsOnPause", True, block=True)
+  params.put("TeslaPreapHandsOnLevel", 2, block=True)
+  ret = interfaces[CAR.TESLA_MODEL_S_PREAP].get_non_essential_params(CAR.TESLA_MODEL_S_PREAP)
+  safety_param = int(ret.safetyConfigs[0].safetyParam)
+  assert safety_param & 8
+  assert ((safety_param >> 8) & 3) == 0
+  assert get_hands_on_disengage_level(safety_param) == 2
+  params.put_bool("TeslaPreapHandsOnPause", False, block=True)
+
+
+def test_hands_on_pause_packs_level_one_and_three():
+  from opendbc.car.tesla.preap.constants import get_hands_on_disengage_level
+
+  params = Params()
+  params.put_bool("TeslaPreapHandsOnPause", True, block=True)
+  params.put("TeslaPreapHandsOnLevel", 1, block=True)
+  ret = interfaces[CAR.TESLA_MODEL_S_PREAP].get_non_essential_params(CAR.TESLA_MODEL_S_PREAP)
+  safety_param = int(ret.safetyConfigs[0].safetyParam)
+  assert safety_param & 8
+  assert ((safety_param >> 8) & 3) == 1
+  assert get_hands_on_disengage_level(safety_param) == 1
+
+  params.put("TeslaPreapHandsOnLevel", 3, block=True)
+  ret = interfaces[CAR.TESLA_MODEL_S_PREAP].get_non_essential_params(CAR.TESLA_MODEL_S_PREAP)
+  safety_param = int(ret.safetyConfigs[0].safetyParam)
+  assert ((safety_param >> 8) & 3) == 3
+  assert get_hands_on_disengage_level(safety_param) == 3
+  params.put_bool("TeslaPreapHandsOnPause", False, block=True)
+
+
+def test_pause_off_does_not_pack_level_bits():
+  from opendbc.car.tesla.preap.constants import get_hands_on_disengage_level
+
+  params = Params()
+  params.put_bool("TeslaPreapHandsOnPause", False, block=True)
+  params.put("TeslaPreapHandsOnLevel", 1, block=True)
+  ret = interfaces[CAR.TESLA_MODEL_S_PREAP].get_non_essential_params(CAR.TESLA_MODEL_S_PREAP)
+  safety_param = int(ret.safetyConfigs[0].safetyParam)
+  assert (safety_param & 8) == 0
+  assert ((safety_param >> 8) & 3) == 0
+  assert get_hands_on_disengage_level(safety_param) == 2
+
+
+def test_invalid_persisted_level_packs_legacy_two():
+  from opendbc.car.tesla.preap.constants import get_hands_on_disengage_level
+
+  params = Params()
+  params.put_bool("TeslaPreapHandsOnPause", True, block=True)
+  params.put("TeslaPreapHandsOnLevel", 0, block=True)
+  ret = interfaces[CAR.TESLA_MODEL_S_PREAP].get_non_essential_params(CAR.TESLA_MODEL_S_PREAP)
+  safety_param = int(ret.safetyConfigs[0].safetyParam)
+  assert ((safety_param >> 8) & 3) == 0
+  assert get_hands_on_disengage_level(safety_param) == 2
+  params.put_bool("TeslaPreapHandsOnPause", False, block=True)

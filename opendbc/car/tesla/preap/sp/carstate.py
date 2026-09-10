@@ -1,12 +1,14 @@
+import math
 import os
 from opendbc.can import CANDefine
 from opendbc.car import Bus, structs
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.tesla.preap.carstate import get_preap_can_parsers, update_preap
+from opendbc.car.tesla.preap.constants import get_hands_on_disengage_level
 from opendbc.car.tesla.preap.engagement import PreAPEngagement
 from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.pedal_feedback import PedalFeedback
-from opendbc.car.tesla.preap.carstate import HANDS_ON_DISENGAGE_LEVEL
 from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
 from opendbc.car.tesla.values import CANBUS, DBC, CruiseButtons
 
@@ -15,6 +17,34 @@ ButtonType = structs.CarState.ButtonEvent.Type
 # Match panda PREAP_HANDS_ON_RESUME_US. Host pull admission stays closed
 # for this hold after hands clear; a held MAIN is not an edge on expiry.
 PREAP_HANDS_ON_RESUME_MS = 1000
+_MAP_MAX_AGE_S = 10.0  # UI_gpsVehicleSpeed ~1 Hz; 10 missed frames is stale.
+_MAP_TYPE_UNKNOWN = 0
+_MAP_TYPE_UNLIMITED = 30
+_MAP_TYPE_SNA = 31
+
+
+def _tesla_map_speed_ms(cp_chassis) -> float:
+  now = cp_chassis._last_update_nanos
+  mpp_ts = cp_chassis.ts_nanos.get("UI_gpsVehicleSpeed", {}).get("UI_mppSpeedLimit", 0)
+  mpp_age_s = (now - mpp_ts) * 1e-9
+  if mpp_ts == 0 or not (0 <= mpp_age_s <= _MAP_MAX_AGE_S):
+    return 0.0
+  type_ts = cp_chassis.ts_nanos.get("UI_driverAssistMapData", {}).get("UI_mapSpeedLimit", 0)
+  if type_ts != 0:
+    type_age_s = (now - type_ts) * 1e-9
+    if type_age_s < 0:
+      return 0.0
+    if type_age_s <= _MAP_MAX_AGE_S:
+      map_type = int(cp_chassis.vl["UI_driverAssistMapData"]["UI_mapSpeedLimit"])
+      if map_type in (_MAP_TYPE_UNKNOWN, _MAP_TYPE_UNLIMITED, _MAP_TYPE_SNA):
+        return 0.0
+  gps = cp_chassis.vl["UI_gpsVehicleSpeed"]
+  mpp = float(gps["UI_mppSpeedLimit"])
+  if mpp <= 0:
+    return 0.0
+  units_kph = int(gps["UI_mapSpeedLimitUnits"]) == 1
+  return mpp * (CV.KPH_TO_MS if units_kph else CV.MPH_TO_MS)
+
 
 # NAP update_preap writes ret.brake = 0. Sunnypilot grouped brake @5 under
 # CarState.deprecated (comma #3338); Honda already writes ret.deprecated.brake.
@@ -126,10 +156,17 @@ class PreAPCarState(CarStateBase):
   def _pause_effective(self) -> bool:
     return bool(int(getattr(self.CP_SP, "flags", 0) or 0) & int(TeslaFlagsSP.PREAP_HANDS_ON_PAUSE))
 
+  def _hands_on_disengage_level(self) -> int:
+    safety_param = 0
+    configs = getattr(self.CP, "safetyConfigs", None)
+    if configs:
+      safety_param = int(configs[0].safetyParam)
+    return get_hands_on_disengage_level(safety_param)
+
   def _hands_on_pause_gate(self) -> bool:
     return (
       self._pause_effective()
-      and self._epas_hands >= HANDS_ON_DISENGAGE_LEVEL
+      and self._epas_hands >= self._hands_on_disengage_level()
       and not self._epas_rejecting
       and not self._epas_fault
     )
@@ -150,7 +187,7 @@ class PreAPCarState(CarStateBase):
       self._reset_pull_inhibit()
       return
 
-    if self._epas_hands >= HANDS_ON_DISENGAGE_LEVEL:
+    if self._epas_hands >= self._hands_on_disengage_level():
       self._pull_inhibit = True
       self._pull_inhibit_clear_timing = False
       return
@@ -244,6 +281,7 @@ class PreAPCarState(CarStateBase):
     ret.brakePressed = bool(self.real_brake_pressed)
     ret.handsOnLevel = int(self.hands_on_level)
     ret_sp = structs.CarStateSP()
+    ret_sp.speedLimit = _tesla_map_speed_ms(can_parsers[Bus.chassis])
     self._publish_mads_intent(ret_sp, ret)
     return ret, ret_sp
 
@@ -261,15 +299,16 @@ class PreAPCarState(CarStateBase):
 
     cruise = bool(self.engagement.cruiseEnabled)
     enable_long = bool(self.engagement.enableLongControl)
+    level = self._hands_on_disengage_level()
     healthy = (
-      self._epas_hands < HANDS_ON_DISENGAGE_LEVEL
+      self._epas_hands < level
       and not self._epas_rejecting
       and not self._epas_fault
     )
     fresh_set_cruise = self._fresh_driver_set_cruise(ret)
 
     if cruise and not self._prev_cruise_enabled:
-      if self._pause_effective() and self._epas_hands >= HANDS_ON_DISENGAGE_LEVEL:
+      if self._pause_effective() and self._epas_hands >= level:
         lateral = None
       else:
         lateral = Lateral.mainCruiseRequest
@@ -304,4 +343,7 @@ class PreAPCarState(CarStateBase):
 
   @staticmethod
   def get_can_parsers(CP, CP_SP):
-    return get_preap_can_parsers(CP)
+    return get_preap_can_parsers(CP, extra_chassis_messages=(
+      ("UI_gpsVehicleSpeed", math.nan),
+      ("UI_driverAssistMapData", math.nan),
+    ))

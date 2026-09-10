@@ -17,6 +17,7 @@ PREAP_FLAG_RADAR_BEHIND_NOSECONE = 4
 PREAP_FLAG_HANDS_ON_PAUSE = 8
 PREAP_FLAG_PEDAL_BUS_ZERO = 1 << 5
 PREAP_FLAG_PEDAL_CALIBRATION = 1 << 6
+PREAP_HANDS_ON_LEVEL_SHIFT = 8
 
 # Stalk lever positions from tesla_preap.h / tesla_preap.dbc
 STALK_IDLE = 0
@@ -898,6 +899,20 @@ class TestTeslaPreAPPedalCalibration(unittest.TestCase):
     self._prime()
     self.assertFalse(self._tx(self._gas(2, 1, 0)))
 
+  def test_explicit_level_bits_reject_calibration(self):
+    for encoded in (1, 2, 3):
+      for base in (PREAP_FLAG_PEDAL_CALIBRATION, PREAP_FLAG_PEDAL_CALIBRATION | PREAP_FLAG_PEDAL_BUS_ZERO):
+        with self.subTest(encoded=encoded, base=base):
+          self._init(base | (encoded << PREAP_HANDS_ON_LEVEL_SHIFT))
+          self._prime()
+          self.assertFalse(self._tx(self._gas(2, 1, 0)))
+          self.assertFalse(self._tx(self._gas(0, 1, 0)))
+
+  def test_unused_bits_reject_calibration(self):
+    self._init(PREAP_FLAG_PEDAL_CALIBRATION | (1 << 7))
+    self._prime()
+    self.assertFalse(self._tx(self._gas(2, 1, 0)))
+
   def test_stale_window(self):
     self._prime()
     self.safety.set_timer(1000001)
@@ -1112,6 +1127,46 @@ class TestTeslaPreAPHandsOnPause(unittest.TestCase):
     self._rx(self._stalk(True))
     self.assertTrue(self._tx(self._gas_enable()))
 
+  def test_level_one_pauses_at_hands_one_not_zero(self):
+    self._init(PREAP_FLAG_HANDS_ON_PAUSE | (1 << PREAP_HANDS_ON_LEVEL_SHIFT))
+    self.safety.set_controls_allowed_lateral(True)
+    self._rx(self._epas(hands=0))
+    self.assertFalse(self.safety.get_steering_control_inhibited())
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    self._rx(self._epas(hands=1))
+    self.assertTrue(self.safety.get_steering_control_inhibited())
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    self.assertFalse(self._tx(self._steer(True)))
+
+  def test_level_three_ignores_hands_two_pauses_at_three(self):
+    self._init(PREAP_FLAG_HANDS_ON_PAUSE | (3 << PREAP_HANDS_ON_LEVEL_SHIFT))
+    self.safety.set_controls_allowed_lateral(True)
+    self._rx(self._epas(hands=2))
+    self.assertFalse(self.safety.get_steering_control_inhibited())
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    self._rx(self._epas(hands=3))
+    self.assertTrue(self.safety.get_steering_control_inhibited())
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+    self.assertFalse(self._tx(self._steer(True)))
+
+  def test_explicit_encoded_two_matches_legacy_pause(self):
+    self._init(PREAP_FLAG_HANDS_ON_PAUSE | (2 << PREAP_HANDS_ON_LEVEL_SHIFT))
+    self.safety.set_controls_allowed_lateral(True)
+    self._rx(self._epas(hands=1))
+    self.assertFalse(self.safety.get_steering_control_inhibited())
+    self._rx(self._epas(hands=2))
+    self.assertTrue(self.safety.get_steering_control_inhibited())
+    self.assertTrue(self.safety.get_controls_allowed_lateral())
+
+  def test_level_one_keeps_active_long(self):
+    self._init(PREAP_FLAG_HANDS_ON_PAUSE | PREAP_FLAG_ENABLE_PEDAL | (1 << PREAP_HANDS_ON_LEVEL_SHIFT))
+    self._rx(self._stalk(True))
+    self.safety.set_controls_allowed_lateral(True)
+    self.assertTrue(self._tx(self._gas_enable()))
+    self._rx(self._epas(hands=1))
+    self.assertTrue(self.safety.get_steering_control_inhibited())
+    self.assertTrue(self._tx(self._gas_enable()))
+    self.assertFalse(self._tx(self._steer(True)))
 
 if __name__ == "__main__":
   unittest.main()

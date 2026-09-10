@@ -3,7 +3,7 @@ from opendbc.car import Bus
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.lateral import apply_steer_angle_limits_vm
 from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
-from opendbc.car.tesla.preap.carstate import HANDS_ON_DISENGAGE_LEVEL
+from opendbc.car.tesla.preap.constants import get_hands_on_disengage_level
 from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
 from opendbc.car.tesla.values import CANBUS, CarControllerParams
@@ -14,6 +14,10 @@ class PreAPCarController(CarControllerBase):
   def __init__(self, dbc_names, CP, CP_SP):
     super().__init__(dbc_names, CP, CP_SP)
     self.apply_angle_last = 0
+    safety_param = 0
+    if getattr(self.CP, "safetyConfigs", None):
+      safety_param = int(getattr(self.CP.safetyConfigs[0], "safetyParam", 0) or 0)
+    self._hands_on_disengage_level = get_hands_on_disengage_level(safety_param)
 
     CANBUS.powertrain = CANBUS.party
     CANBUS.autopilot_powertrain = CANBUS.autopilot_party
@@ -37,7 +41,7 @@ class PreAPCarController(CarControllerBase):
 
     # MADS drives CC.latActive on sunnypilot (controlsd_ext.get_lat_active).
     # Do not consult CS.cruiseEnabled for steer TX.
-    lat_active = CC.latActive and CS.hands_on_level < HANDS_ON_DISENGAGE_LEVEL
+    lat_active = CC.latActive and CS.hands_on_level < self._hands_on_disengage_level
 
     if self.frame % 2 == 0:
       self.apply_angle_last = apply_steer_angle_limits_vm(

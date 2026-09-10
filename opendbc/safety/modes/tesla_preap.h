@@ -39,7 +39,7 @@
 // ALL ACTUAL SAFETY CHECKS REMAIN FULLY ACTIVE:
 //   - Steering angle + rate limits via steer_angle_cmd_checks_vm()
 //   - controls_allowed gating on all TX
-//   - Hands-on level >= 2: default full disengage; pause (bit 8) inhibits lat only
+//   - Hands-on: decoded safetyParam bits 8-9 (0=>2); pause (bit 3) inhibits lat only
 //   - Disengage on EPAS error codes 6-9
 //   - Disengage on door open, gear out of Drive
 //   - Disengage on stalk cancel (with 600ms echo filter)
@@ -82,7 +82,10 @@ void can_set_checksum(CANPacket_t *packet);
 #define PREAP_FLAG_HANDS_ON_PAUSE        8U
 #define PREAP_FLAG_PEDAL_BUS_ZERO       (1U << 5)
 #define PREAP_FLAG_PEDAL_CALIBRATION    (1U << 6)
+#define PREAP_HANDS_ON_LEVEL_SHIFT      8U
+#define PREAP_HANDS_ON_LEVEL_MASK       3U
 #define PREAP_HANDS_ON_DISENGAGE_LEVEL  2
+#define PREAP_CALIBRATION_ALLOWED_MASK  (PREAP_FLAG_PEDAL_CALIBRATION | PREAP_FLAG_PEDAL_BUS_ZERO)
 #define PREAP_CALIBRATION_SOURCE_TIMEOUT_US 1000000U
 #define PREAP_HANDS_ON_RESUME_US        1000000U
 
@@ -95,6 +98,7 @@ static bool preap_radar_emulation = false;
 static bool preap_pedal_calibration = false;
 static bool preap_hands_on_pause = false;
 static uint8_t preap_pedal_bus = 2U;
+static int preap_hands_on_disengage_level = PREAP_HANDS_ON_DISENGAGE_LEVEL;
 static int preap_hands_on_level = 0;
 static bool preap_hands_on_clear_timing = false;
 static uint32_t preap_hands_on_clear_ts = 0U;
@@ -609,7 +613,7 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
     bool epas_rejecting = (eac_status == 0) && (eac_error_code >= 6) && (eac_error_code <= 9);
     const bool eac_fault = (eac_status == 3);
     preap_hands_on_level = hands_on_level;
-    const bool hands_on = hands_on_level >= PREAP_HANDS_ON_DISENGAGE_LEVEL;
+    const bool hands_on = hands_on_level >= preap_hands_on_disengage_level;
     if (preap_hands_on_pause && !eac_fault && !epas_rejecting && hands_on && controls_allowed_lateral) {
       // Pause lat only. Keep already-active long; do not pcm_cruise_check(false)
       // and do not admit a new long request while inhibited.
@@ -622,7 +626,7 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
       pcm_cruise_check(false);
     } else if (preap_hands_on_pause && steering_control_inhibited) {
       steering_disengage = false;
-      const bool clear_ok = (hands_on_level < PREAP_HANDS_ON_DISENGAGE_LEVEL) &&
+      const bool clear_ok = (hands_on_level < preap_hands_on_disengage_level) &&
                             (preap_gear == 4) && !preap_doors_open &&
                             controls_allowed_lateral;
       if (!clear_ok) {
@@ -718,7 +722,7 @@ static void tesla_preap_rx_hook(const CANPacket_t *msg) {
     const bool fresh_pull = (lever == 2) && (cruise_button_prev != 2);
     if (lever == 2) {  // RWD = pull toward driver = enable
       if (fresh_pull && (preap_gear == 4) && !preap_doors_open &&
-          (preap_hands_on_level < PREAP_HANDS_ON_DISENGAGE_LEVEL) &&
+          (preap_hands_on_level < preap_hands_on_disengage_level) &&
           !steering_control_inhibited) {
         cruise_engaged_prev = false;
         pcm_cruise_check(true);
@@ -920,15 +924,16 @@ static bool tesla_preap_fwd_hook(int bus_num, int addr) {
 static safety_config tesla_preap_init(uint16_t param) {
   const bool calib_requested = GET_FLAG(param, PREAP_FLAG_PEDAL_CALIBRATION);
   const bool mixed_calib = calib_requested &&
-                           (GET_FLAG(param, PREAP_FLAG_ENABLE_PEDAL) ||
-                            GET_FLAG(param, PREAP_FLAG_RADAR_EMULATION) ||
-                            GET_FLAG(param, PREAP_FLAG_RADAR_BEHIND_NOSECONE) ||
-                            GET_FLAG(param, PREAP_FLAG_HANDS_ON_PAUSE));
+                           ((param & (uint16_t)~(PREAP_CALIBRATION_ALLOWED_MASK)) != 0U);
   preap_pedal_calibration = calib_requested && !mixed_calib;
   preap_enable_pedal = GET_FLAG(param, PREAP_FLAG_ENABLE_PEDAL) && !preap_pedal_calibration && !mixed_calib;
   preap_radar_emulation = GET_FLAG(param, PREAP_FLAG_RADAR_EMULATION) && !preap_pedal_calibration && !mixed_calib;
   preap_hands_on_pause = GET_FLAG(param, PREAP_FLAG_HANDS_ON_PAUSE) && !preap_pedal_calibration && !mixed_calib;
   preap_pedal_bus = GET_FLAG(param, PREAP_FLAG_PEDAL_BUS_ZERO) ? 0U : 2U;
+  {
+    const unsigned int encoded_level = ((unsigned int)param >> PREAP_HANDS_ON_LEVEL_SHIFT) & PREAP_HANDS_ON_LEVEL_MASK;
+    preap_hands_on_disengage_level = (encoded_level == 0U) ? PREAP_HANDS_ON_DISENGAGE_LEVEL : (int)encoded_level;
+  }
   steering_control_inhibited = false;
   preap_hands_on_level = 0;
   preap_hands_on_clear_timing = false;

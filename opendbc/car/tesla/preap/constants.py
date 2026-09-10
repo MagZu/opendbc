@@ -57,3 +57,30 @@ VDAS_ZERO_TORQUE_TRANSITION_WIDTH = 0.25  # m/s² on each side of zero
 # This limits one-frame sensor/source discontinuities without constraining the
 # tighter acceleration-command jerk limits above.
 VDAS_EGO_JERK_MAX = 5.0  # m/s³
+
+# EPAS hands-on disengage/pause threshold encoded in safetyParam bits 8-9.
+# Encoded 0 is the legacy default (level 2). Explicit 1/2/3 are accepted.
+HANDS_ON_DISENGAGE_LEVEL_DEFAULT = 2
+HANDS_ON_LEVEL_SHIFT = 8
+HANDS_ON_LEVEL_MASK = 0x3
+
+
+def get_hands_on_disengage_level(safety_param: int) -> int:
+  encoded = (int(safety_param) >> HANDS_ON_LEVEL_SHIFT) & HANDS_ON_LEVEL_MASK
+  if encoded in (1, 2, 3):
+    return encoded
+  return HANDS_ON_DISENGAGE_LEVEL_DEFAULT
+
+
+def parse_hands_on_level_param(raw) -> int:
+  if isinstance(raw, bool) or not isinstance(raw, (int, str, bytes, bytearray)):
+    return HANDS_ON_DISENGAGE_LEVEL_DEFAULT
+  try:
+    if isinstance(raw, (bytes, bytearray)):
+      raw = raw.decode("utf-8")
+    value = int(raw)
+  except ValueError:
+    return HANDS_ON_DISENGAGE_LEVEL_DEFAULT
+  if value in (1, 2, 3):
+    return value
+  return HANDS_ON_DISENGAGE_LEVEL_DEFAULT

@@ -8,6 +8,8 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
 from opendbc.car.tesla.preap.nap_conf import nap_conf, PEDAL_DI_PRESSED
+from opendbc.car.tesla.preap.constants import get_hands_on_disengage_level
+
 
 try:
   from openpilot.common.params import Params as _NAPParams
@@ -17,7 +19,25 @@ except ImportError:
 
 # Pre-AP door signal names from GTW_carState
 _DOORS = ("DOOR_STATE_FL", "DOOR_STATE_FR", "DOOR_STATE_RL", "DOOR_STATE_RR", "DOOR_STATE_FrontTrunk", "BOOT_STATE")
-HANDS_ON_DISENGAGE_LEVEL = 2
+_SDM1_MAX_AGE_S = 1.0  # SDM1 is 10 Hz; unseen/stale is unknown/unlatched.
+
+
+def _hands_on_disengage_level(cs):
+  safety_param = 0
+  cp = getattr(cs, "CP", None)
+  configs = getattr(cp, "safetyConfigs", None) if cp is not None else None
+  if configs:
+    safety_param = int(configs[0].safetyParam)
+  return get_hands_on_disengage_level(safety_param)
+
+
+def _sdm1_seatbelt_unlatched(cp_chassis):
+  ts = cp_chassis.ts_nanos.get("SDM1", {}).get("SDM_bcklDrivStatus", 0)
+  now = cp_chassis._last_update_nanos
+  age_s = (now - ts) * 1e-9
+  if ts == 0 or not (0 <= age_s <= _SDM1_MAX_AGE_S):
+    return True
+  return cp_chassis.vl["SDM1"]["SDM_bcklDrivStatus"] != 1
 
 
 def _current_time_millis():
@@ -67,7 +87,7 @@ def update_preap(cs, can_parsers):
     "EAC_ERROR_HIGH_ANGLE_REQ", "EAC_ERROR_HIGH_ANGLE_RATE_REQ",
     "EAC_ERROR_HIGH_ANGLE_SAFETY", "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY",
   )
-  ret.steeringDisengage = cs.hands_on_level >= HANDS_ON_DISENGAGE_LEVEL or epas_rejecting
+  ret.steeringDisengage = cs.hands_on_level >= _hands_on_disengage_level(cs) or epas_rejecting
   cs.engagement.handle_steering_disengage(ret.steeringDisengage)
 
   # Cruise state
@@ -105,8 +125,9 @@ def update_preap(cs, can_parsers):
   ret.leftBlinker = cp_chassis.vl["GTW_carState"]["BC_indicatorLStatus"] == 1
   ret.rightBlinker = cp_chassis.vl["GTW_carState"]["BC_indicatorRStatus"] == 1
 
-  # Seatbelt — SDM1 (0x201) collides with Comma Pedal, hardcode for now
-  ret.seatbeltUnlatched = False
+  # SDM1 (0x201) is optional: nan subscription must not poison can_valid.
+  # HW1 polarity is status != 1. Unseen/stale/unknown is unlatched.
+  ret.seatbeltUnlatched = _sdm1_seatbelt_unlatched(cp_chassis)
 
   # AEB/LKAS — Pre-AP has no DAS ECU
   ret.stockAeb = False
@@ -199,10 +220,12 @@ def update_preap(cs, can_parsers):
   return ret
 
 
-def get_preap_can_parsers(CP):
+def get_preap_can_parsers(CP, extra_chassis_messages=()):
   chassis_messages = [
     ("ESP_B", 0), ("BrakeMessage", 0), ("DI_state", 0), ("DI_torque2", 0),
     ("GTW_carState", 0), ("STW_ANGLHP_STAT", 0), ("EPAS_sysStatus", 0), ("STW_ACTN_RQ", 0),
+    ("SDM1", math.nan),
+    *extra_chassis_messages,
   ]
   pt_messages = [("DI_torque1", 0), ("ESP_B", 0)]
   party_messages = [("ESP_B", 0)]
