@@ -978,6 +978,25 @@ static safety_config tesla_preap_init(uint16_t param) {
     {0x3E9, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_bodyControls (turn signal)
     {0x560, 0, 8, .check_relay = false, .disable_static_blocking = true},  // donor VIN/config to panda
     {0x641, 1, 8, .check_relay = false, .disable_static_blocking = true},  // radar F190 read
+
+    // NAP Buddy IC integration — display-only frames. The Buddy bridge sniffs
+    // these off chassis bus 0 and forwards them to the instrument cluster; the
+    // Tesla gateway does not forward them there itself. None of these reach an
+    // ECU with an actuation path: no steering, throttle, brake or gear effect.
+    // DAS_bodyControls (0x3E9) is already allowed above, for turn signals.
+    {0x239, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_lanes
+    {0x309, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_object (lead car)
+    {0x329, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_warningMatrix0
+    {0x349, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_warningMatrix3
+    {0x369, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_warningMatrix1
+    {0x389, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_status2
+    {0x399, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_status
+    {0x3A9, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_telemetry
+    // 0x659 is not UDS despite the arb-ID: a NAP Buddy status frame carrying
+    // display state. It echoes apply_angle / enable_steer_control for the
+    // bridge, but actuation stays on DAS_steeringControl (0x488) - nothing
+    // steers off this frame.
+    {0x659, 0, 8, .check_relay = false, .disable_static_blocking = true},  // NAP Buddy status
   };
 
   // RX checks — disable EPAS counter/checksum until we verify the Pre-AP

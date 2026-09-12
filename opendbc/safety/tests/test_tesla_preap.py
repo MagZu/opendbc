@@ -85,6 +85,16 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     [0x551, 2],  # Pedal bus 2
     [0x45,  0],  # STW_ACTN_RQ (stalk spoof)
     [0x3E9, 0],  # DAS_bodyControls (turn signal)
+    # NAP Buddy IC integration — display-only, not gated on controls_allowed
+    [0x239, 0],  # DAS_lanes
+    [0x309, 0],  # DAS_object (lead car)
+    [0x329, 0],  # DAS_warningMatrix0
+    [0x349, 0],  # DAS_warningMatrix3
+    [0x369, 0],  # DAS_warningMatrix1
+    [0x389, 0],  # DAS_status2
+    [0x399, 0],  # DAS_status
+    [0x3A9, 0],  # DAS_telemetry
+    [0x659, 0],  # NAP Buddy status frame
   ]
 
   STANDSTILL_THRESHOLD = 0.5 / 3.6  # 0.5 kph in m/s
