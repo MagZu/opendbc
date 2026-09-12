@@ -4,6 +4,18 @@ from ctypes import create_string_buffer
 from opendbc.car.tesla.teslacan_legacy import TeslaCANRaven
 from opendbc.car.tesla.values import CANBUS
 
+# NAP Buddy IC integration — arbitration IDs for frames the Buddy bridge sniffs
+# off chassis bus 0 and forwards to the instrument cluster. DBC-packed frames
+# resolve their own ID from tesla_preap.dbc; these are for the raw struct.pack
+# frames and for checksum calls that need the ID explicitly.
+DAS_WARNING_MATRIX_0_MSG_ID = 0x329
+DAS_WARNING_MATRIX_1_MSG_ID = 0x369
+DAS_WARNING_MATRIX_3_MSG_ID = 0x349
+DAS_STATUS2_MSG_ID = 0x389
+DAS_STATUS_MSG_ID = 0x399
+# Not UDS despite the arb-ID: NAP Buddy status/display frame.
+NAP_BUDDY_STATUS_MSG_ID = 0x659
+
 # Comma Pedal protocol constants
 PEDAL_M1 = 0.050796813    # Primary scaling factor
 PEDAL_M2 = 0.101593626    # Secondary scaling (2x M1 for redundancy)
@@ -141,3 +153,228 @@ class TeslaCANPreAP(TeslaCANRaven):
     data = self.packers[CANBUS.party].make_can_msg("DAS_bodyControls", bus, values)[1]
     values["DAS_bodyControlsChecksum"] = self.checksum(0x3E9, data[:7])
     return self.packers[CANBUS.party].make_can_msg("DAS_bodyControls", bus, values)
+
+  def create_lane_message(self, lWidth, rLine, lLine, laneRange, curvC0, curvC1, curvC2, curvC3,
+                          lLane2, rLane2, bus, counter):
+    """DAS_lanes (0x239) — virtual lane geometry for IC path rendering, 10Hz."""
+    values = {
+      "DAS_leftLaneExists": lLine,
+      "DAS_rightLaneExists": rLine,
+      "DAS_virtualLaneWidth": lWidth,
+      "DAS_virtualLaneViewRange": laneRange,
+      "DAS_virtualLaneC0": curvC0,
+      "DAS_virtualLaneC1": curvC1,
+      "DAS_virtualLaneC2": curvC2,
+      "DAS_virtualLaneC3": curvC3,
+      "DAS_leftLineUsage": lLine * 2,
+      "DAS_rightLineUsage": rLine * 2,
+      "DAS_leftFork": lLane2,
+      "DAS_rightFork": rLane2,
+      "DAS_lanesCounter": counter,
+    }
+    return self.packers[CANBUS.party].make_can_msg("DAS_lanes", bus, values)
+
+  def create_lead_car_object_message(self, objectId, vType1, vId1, relevant1, dx1, vxrel1, dy1,
+                                      vType2, vId2, relevant2, dx2, vxrel2, dy2, bus):
+    """DAS_object (0x309) — lead-car position+velocity for IC, 10Hz.
+
+    Sends m0 (DAS_objectId=0) for lead-vehicle frames. The NotAutopilot DBC has
+    an extended multiplexer for m1-m5, but only m0 is used here.
+    """
+    values = {
+      "DAS_objectId": objectId,  # 0 = Lead vehicles
+      "DAS_leadVehType": vType1,
+      "DAS_leadVehRelevantForControl": relevant1,
+      "DAS_leadVehDx": dx1,
+      "DAS_leadVehVxRel": vxrel1,
+      "DAS_leadVehDy": dy1,
+      "DAS_leadVehId": vId1,
+      "DAS_leadVeh2Type": vType2,
+      "DAS_leadVeh2RelevantForControl": relevant2,
+      "DAS_leadVeh2Dx": dx2,
+      "DAS_leadVeh2VxRel": vxrel2,
+      "DAS_leadVeh2Dy": dy2,
+      "DAS_leadVeh2Id": vId2,
+    }
+    return self.packers[CANBUS.party].make_can_msg("DAS_object", bus, values)
+
+  def create_telemetry_road_info(self, lLine, rLine, lLineQualRaw, rLineQualRaw, alcaState, bus):
+    """DAS_telemetry (0x3A9) — road-info marker types/colors/quality, 1Hz.
+
+    alcaState: 0=none, 1=alca-left, 2=alca-right.
+    Only m0 is built (DAS_telemetryMultiplexer=0).
+    """
+    rLineType = 1 if rLine == 1 else 7
+    rLineColor = 2 if rLine == 1 else 0
+    rLineQual = 3 if rLine == 1 else 0
+    if rLineQualRaw == 1:
+      rLineType = 3
+      rLineColor = 1
+    lLineType = 1 if lLine == 1 else 7
+    lLineColor = 2 if lLine == 1 else 0
+    lLineQual = 3 if lLine == 1 else 0
+    if lLineQualRaw == 1:
+      lLineType = 3
+      lLineColor = 1
+    values = {
+      "DAS_telemetryMultiplexer": 0,
+      "DAS_telLeftLaneType": lLineType,
+      "DAS_telRightLaneType": rLineType,
+      "DAS_telLeftMarkerQuality": lLineQual,
+      "DAS_telRightMarkerQuality": rLineQual,
+      "DAS_telLeftMarkerColor": lLineColor,
+      "DAS_telRightMarkerColor": rLineColor,
+      "DAS_telLeftLaneCrossing": 0 if alcaState != 1 else 1,
+      "DAS_telRightLaneCrossing": 0 if alcaState != 2 else 1,
+    }
+    return self.packers[CANBUS.party].make_can_msg("DAS_telemetry", bus, values)
+
+  def create_das_warningMatrix0(self, DAS_canErrors, DAS_025_steeringOverride, DAS_notInDrive, bus):
+    """warningMatrix0 (0x329) — raw struct.pack, 1Hz. Not in DBC."""
+    msg = create_string_buffer(8)
+    struct.pack_into("BBBBBBBB", msg, 0,
+                     0, 0, 0, DAS_025_steeringOverride + (DAS_canErrors << 7),
+                     0, (DAS_notInDrive << 7), 0, 0)
+    return (DAS_WARNING_MATRIX_0_MSG_ID, bytes(msg.raw), bus)
+
+  def create_das_warningMatrix1(self, bus):
+    """warningMatrix1 (0x369) — raw struct.pack, all zeros (constant), 1Hz."""
+    msg = create_string_buffer(8)
+    struct.pack_into("BBBBBBBB", msg, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    return (DAS_WARNING_MATRIX_1_MSG_ID, bytes(msg.raw), bus)
+
+  def create_das_warningMatrix3(self, DAS_gas_to_resume, DAS_211_accNoSeatBelt, DAS_202_noisyEnvironment,
+                                  DAS_206_apUnavailable, DAS_207_lkasUnavailable,
+                                  DAS_219_lcTempUnavailableSpeed, DAS_220_lcTempUnavailableRoad,
+                                  DAS_221_lcAborting, DAS_222_accCameraBlind,
+                                  DAS_208_rackDetected, DAS_w216_driverOverriding,
+                                  stopSignWarning, stopLightWarning, bus):
+    """warningMatrix3 (0x349) — raw struct.pack, 1Hz. Not in DBC."""
+    msg = create_string_buffer(8)
+    struct.pack_into("BBBBBBBB", msg, 0,
+                     (DAS_gas_to_resume << 1) + (stopSignWarning << 3) + (stopLightWarning << 4),
+                     (DAS_202_noisyEnvironment << 1) + (DAS_206_apUnavailable << 5)
+                       + (DAS_207_lkasUnavailable << 6) + (DAS_208_rackDetected << 7),
+                     (DAS_211_accNoSeatBelt << 2) + (DAS_w216_driverOverriding << 7),
+                     (DAS_219_lcTempUnavailableSpeed << 2) + (DAS_220_lcTempUnavailableRoad << 3)
+                       + (DAS_221_lcAborting << 4) + (DAS_222_accCameraBlind << 5),
+                     0, 0, 0, 0)
+    return (DAS_WARNING_MATRIX_3_MSG_ID, bytes(msg.raw), bus)
+
+  def create_das_status(self, DAS_op_status, DAS_collision_warning,
+                         DAS_ldwStatus, DAS_hands_on_state, DAS_alca_state,
+                         blindSpotLeft, blindSpotRight,
+                         DAS_speed_limit_kph, DAS_fleetSpeedState, bus):
+    """DAS_status (0x399) — AP-status, blind-spot, fleet-speed for IC, 2Hz.
+
+    Counter rotates from internal das_status_idx (0-15) — NAP Buddy holdt
+    konstant 1, vi roterer for å minimere risiko for stale-frame-detect på IC.
+    """
+    values = {
+      "DAS_autopilotState": DAS_op_status,
+      "DAS_blindSpotRearLeft": 1 if blindSpotLeft else 0,
+      "DAS_blindSpotRearRight": 1 if blindSpotRight else 0,
+      "DAS_fusedSpeedLimit": DAS_speed_limit_kph,
+      "DAS_suppressSpeedWarning": 0,
+      "DAS_summonObstacle": 0,
+      "DAS_summonClearedGate": 0,
+      "DAS_visionOnlySpeedLimit": DAS_speed_limit_kph,
+      "DAS_heaterState": 0,
+      "DAS_forwardCollisionWarning": DAS_collision_warning,
+      "DAS_autoparkReady": 0,
+      "DAS_autoParked": 0,
+      "DAS_autoparkWaitingForBrake": 0,
+      "DAS_summonFwdLeashReached": 0,
+      "DAS_summonRvsLeashReached": 0,
+      "DAS_sideCollisionAvoid": 0,
+      "DAS_sideCollisionWarning": 0,
+      "DAS_sideCollisionInhibit": 0,
+      "DAS_lssState": 0,
+      "DAS_laneDepartureWarning": DAS_ldwStatus,
+      "DAS_fleetSpeedState": DAS_fleetSpeedState,
+      "DAS_autopilotHandsOnState": DAS_hands_on_state,
+      "DAS_autoLaneChangeState": DAS_alca_state,
+      "DAS_summonAvailable": 0,
+      "DAS_statusCounter": self.das_status_idx,
+      "DAS_statusChecksum": 0,
+    }
+    self.das_status_idx = (self.das_status_idx + 1) % 16
+    # V58 revert V57: IC validerer checksum, hardkodet 0 brakk hele DAS_status
+    # (regresjon: skilt-widget + kantlinjer borte). NAP Buddys `: 0` overrides
+    # antagelig av CANPacker auto-checksum via DBC-konvensjon, mens vår mangler.
+    data = self.packers[CANBUS.party].make_can_msg("DAS_status", bus, values)[1]
+    values["DAS_statusChecksum"] = self.checksum(DAS_STATUS_MSG_ID, data[:7])
+    return self.packers[CANBUS.party].make_can_msg("DAS_status", bus, values)
+
+  def create_das_status2(self, DAS_csaState, DAS_acc_speed_limit, fcw, bus):
+    """DAS_status2 (0x389) — CSA-state + ACC-speed-limit + FCW, 2Hz.
+
+    Counter rotates from internal das_status2_idx (0-15) — NAP Buddy holdt
+    konstant 1, vi roterer for å minimere risiko for stale-frame-detect på IC.
+    """
+    fcw_sig = 0x0F if fcw == 0 else 0x01
+    values = {
+      "DAS_accSpeedLimit": DAS_acc_speed_limit,
+      "DAS_pmmObstacleSeverity": 0,
+      "DAS_pmmLoggingRequest": 0,
+      "DAS_activationFailureStatus": 0,
+      "DAS_pmmUltrasonicsFaultReason": 0,
+      "DAS_pmmRadarFaultReason": 0,
+      "DAS_pmmSysFaultReason": 0,
+      "DAS_pmmCameraFaultReason": 0,
+      "DAS_ACC_report": 1,
+      "DAS_csaState": DAS_csaState,
+      "DAS_radarTelemetry": 1,
+      "DAS_robState": 2,
+      "DAS_driverInteractionLevel": 0,
+      "DAS_ppOffsetDesiredRamp": 0x80,
+      "DAS_longCollisionWarning": fcw_sig,
+      "DAS_status2Counter": self.das_status2_idx,
+      "DAS_status2Checksum": 0,
+    }
+    self.das_status2_idx = (self.das_status2_idx + 1) % 16
+    # V58 revert V57: IC validerer checksum, restorerer computed checksum.
+    data = self.packers[CANBUS.party].make_can_msg("DAS_status2", bus, values)[1]
+    values["DAS_status2Checksum"] = self.checksum(DAS_STATUS2_MSG_ID, data[:7])
+    return self.packers[CANBUS.party].make_can_msg("DAS_status2", bus, values)
+
+  def create_fake_DAS_msg(self, speed_control_enabled, speed_override, apUnavailable,
+                           collision_warning, op_status, acc_speed_kph,
+                           turn_signal_needed, forward_collission_warning,
+                           adaptive_cruise, hands_on_state, cc_state, pcc_available,
+                           alca_state, acc_speed_limit, legal_speed_limit, apply_angle,
+                           enable_steer_control, pedalEnabled, autopilot_disabled, bus):
+    """fake DAS message (0x659) — Buddy-fallback + panda state-channel, 1Hz.
+
+    Byte 5 has dual purpose: legal_speed_limit (0:5) + pedalEnabled (bit5) + autopilot_disabled (bit7).
+    Sent regardless of the IC-integration toggle, matching the original behaviour.
+    """
+    units_included = 1
+    c_apply_steer = int(
+      ((int(apply_angle * 10 + 0x4000)) & 0x7FFF) + (enable_steer_control << 15)
+    )
+    dat = [
+      int(
+        (speed_control_enabled << 7)
+        + (speed_override << 6)
+        + (apUnavailable << 5)
+        + (collision_warning << 4)
+        + op_status
+      ),
+      int(acc_speed_kph),
+      int(
+        (turn_signal_needed << 6)
+        + (units_included << 5)
+        + (forward_collission_warning << 4)
+        + (adaptive_cruise << 3)
+        + hands_on_state
+      ),
+      int((cc_state << 6) + (pcc_available << 5) + alca_state),
+      int(acc_speed_limit + 0.5),
+      int(
+        (legal_speed_limit & 0x1F) + ((pedalEnabled << 5) & 0x20) + ((autopilot_disabled << 7) & 0x80)
+      ),
+      int(c_apply_steer & 0xFF),
+      int((c_apply_steer >> 8) & 0xFF)
+    ]
+    return (NAP_BUDDY_STATUS_MSG_ID, bytes(dat), bus)
