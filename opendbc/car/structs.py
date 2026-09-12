@@ -200,6 +200,7 @@ class CarControlSP:
   leadTwo: 'LeadData' = field(default_factory=lambda: LeadData())
   intelligentCruiseButtonManagement: 'IntelligentCruiseButtonManagement' = field(default_factory=lambda: IntelligentCruiseButtonManagement())
   napBuddyLanes: 'NapBuddyLanes' = field(default_factory=lambda: NapBuddyLanes())
+  napBuddySpeedLimit: float = auto_field()
 
   @auto_dataclass
   class Param:

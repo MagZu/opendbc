@@ -41,6 +41,10 @@ IC_LANE_SCALE = 0.5
 LANE_LINE_PROB = 0.45
 LANE_QUALITY_PROB = 0.25
 
+# How often to re-read the toggle, in ticks of a 100Hz control loop. Reading the
+# params filesystem every tick costs enough to trip "system lagging" on a comma 3.
+TOGGLE_POLL_TICKS = 50
+
 # Cluster warning latch, in ticks. A warning stays lit this long after it clears
 # so a single-frame blip is still readable.
 WARNING_LATCH_TICKS = 200
@@ -61,6 +65,18 @@ class NapBuddyHUD:
     self.warning_ticks = 0
     self.prev_enabled = False
 
+    # Toggle is polled, not read every tick. Start False so nothing is emitted
+    # before the first read.
+    self._enabled_cached = False
+    self._pedal_cached = False
+    self._toggle_ticks = 0
+
+    # DAS_lanes carries its own rolling counter. Tinkla had the panda firmware
+    # increment it; we do not run that firmware, so a fixed counter makes every
+    # lane frame byte-identical and the cluster stops redrawing the path after
+    # the first one.
+    self.lanes_idx = 0
+
     # Lane state, held between updates so the cluster keeps the last good path
     # if a model frame is missed.
     self.lane_width = 4.0
@@ -70,10 +86,28 @@ class NapBuddyHUD:
     self.right_quality = 0
     self.curv = [0.0, 0.0, 0.0, 0.0]
 
+    # Speed limit for the cluster's road-sign widget, km/h. 0 means no sign.
+    self.speed_limit_kph = 0
+
+  def _refresh_toggle(self):
+    """Re-read the toggle periodically, not every tick.
+
+    CarController.update runs at 100Hz, and nap_conf reads go to the params
+    filesystem. Polling that 100 times a second is enough to blow the control
+    loop's realtime budget on a comma 3 and raise "system lagging". Every
+    TOGGLE_POLL_TICKS is twice a second, which is plenty for a settings toggle.
+    """
+    if self._toggle_ticks <= 0:
+      self._toggle_ticks = TOGGLE_POLL_TICKS
+      self._enabled_cached = nap_conf.buddy_ic_integration
+      # Polled here too rather than read per-frame; it only feeds a display bit.
+      self._pedal_cached = nap_conf.use_pedal
+    self._toggle_ticks -= 1
+    return self._enabled_cached
+
   @property
   def enabled(self):
-    """Toggle state. Read every update so it takes effect without a restart."""
-    return nap_conf.buddy_ic_integration
+    return self._enabled_cached
 
   def _update_lanes(self, CC_SP):
     """Take lane geometry from CarControlSP, if the openpilot side supplies it.
@@ -101,6 +135,19 @@ class NapBuddyHUD:
       _clip(float(lanes.c2), -0.0025, 0.0025),
       _clip(float(lanes.c3), -0.00003, 0.00003),
     ]
+
+  def _update_speed_limit(self, CC_SP):
+    """Speed limit for the cluster road-sign widget.
+
+    Sourced from sunnypilot's speed-limit pipeline in the openpilot layer. 0 when
+    there is no limit available, which the cluster renders as no sign.
+    """
+    limit = getattr(CC_SP, "napBuddySpeedLimit", 0.0)
+    try:
+      limit_kph = int(round(float(limit) * CV.MS_TO_KPH))
+    except (TypeError, ValueError):
+      limit_kph = 0
+    self.speed_limit_kph = limit_kph if 0 < limit_kph <= 160 else 0
 
   def _lead_frame(self, CC_SP):
     """DAS_object (0x309) — lead car marker.
@@ -134,41 +181,72 @@ class NapBuddyHUD:
       CHASSIS_BUS,
     )
 
-  def _status_frames(self, CC, CS, messages):
+  def _status_frames(self, CC, CC_SP, CS, messages):
     """DAS_status / DAS_status2 — the AP status area of the cluster."""
     hud = CC.hudControl
     enabled = CC.enabled
 
-    # op_status: 2 = available but off, 5 = actively steering.
-    op_status = 5 if enabled else 2
+    # DAS_op_status, per the Tesla encoding:
+    #   0 disabled  1 unavailable  2 available  3 active nominal
+    #   4 active restricted  5 active nav  8 aborting  9 aborted  14 fault
+    # The cluster draws the steering wheel grey on 1 (unavailable) and lights it
+    # once openpilot is actually steering. MADS availability is the closest thing
+    # the car layer has to controlsd's "engageable".
+    engageable = bool(getattr(getattr(CC_SP, "mads", None), "available", False))
+    if enabled:
+      op_status = 5
+    elif engageable:
+      op_status = 2
+    else:
+      op_status = 1
+    csa_state = 2 if enabled else (1 if engageable else 0)
+
     collision_warning = 1 if hud.visualAlert == VisualAlert.fcw else 0
 
-    # Cruise set speed for the cluster readout. hudControl carries it in m/s.
-    set_speed = max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH)
-    if set_speed > 250:  # SNA / not set
-      set_speed = 0.0
+    # DAS_hands_on_state: 2 is the normal "hands detected" state. 3 flashes the
+    # lamp at the top of the cluster when the driver is overriding or openpilot
+    # is asking for hands. 0 is not a valid resting value.
+    hands_on_state = 2
+    if hud.visualAlert == VisualAlert.steerRequired:
+      hands_on_state = 3
+    elif enabled and CS.out.steeringPressed:
+      hands_on_state = 3
 
-    # alca_state 1 = unavailable, no lane change offered. Lane-change rendering
-    # is not part of this port.
-    alca_state = 1
+    # Set speed readout. Only meaningful while cruise is actually engaged;
+    # showing it otherwise puts a number on the cluster the car is not holding.
+    set_speed = 0.0
+    if CS.out.cruiseState.enabled:
+      set_speed = max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH)
+      if set_speed > 250:  # SNA / not set
+        set_speed = 0.0
 
-    # ldw_status: lane departure warning, straight from hudControl.
+    # DAS_alca_state, from lane availability:
+    #   1 unavailable (no lanes)  6 left only  7 right only  8 both
+    if self.left_quality and self.right_quality:
+      alca_state = 8
+    elif self.left_quality:
+      alca_state = 6
+    elif self.right_quality:
+      alca_state = 7
+    else:
+      alca_state = 1
+
     ldw_status = 1 if (hud.leftLaneDepart or hud.rightLaneDepart) else 0
 
     messages.append(self.tesla_can.create_das_status(
       op_status,          # DAS_op_status
       collision_warning,  # DAS_collision_warning
       ldw_status,         # DAS_ldwStatus
-      0,                  # DAS_hands_on_state — not modelled here
+      hands_on_state,     # DAS_hands_on_state
       alca_state,         # DAS_alca_state
       0,                  # blindSpotLeft  — no BSM source on Pre-AP
       0,                  # blindSpotRight
-      0,                  # DAS_speed_limit_kph — no map speed-limit source
-      0,                  # DAS_fleetSpeedState
+      self.speed_limit_kph,
+      1 if self.speed_limit_kph > 0 else 0,  # DAS_fleetSpeedState
       CHASSIS_BUS,
     ))
     messages.append(self.tesla_can.create_das_status2(
-      0, set_speed, collision_warning, CHASSIS_BUS,
+      csa_state, set_speed, collision_warning, CHASSIS_BUS,
     ))
 
   def update(self, CC, CC_SP, CS):
@@ -180,6 +258,7 @@ class NapBuddyHUD:
     self.tick = (self.tick + 1) % 100
     if self.warning_ticks > 0:
       self.warning_ticks -= 1
+    self._refresh_toggle()
 
     messages = []
     if not self.enabled:
@@ -191,6 +270,7 @@ class NapBuddyHUD:
     disengage_edge = self.prev_enabled and not enabled
 
     self._update_lanes(CC_SP)
+    self._update_speed_limit(CC_SP)
 
     # Warning bits the cluster can show. Kept minimal and derived from state
     # openpilot already exposes; the rest of the Tesla warning matrix is left at
@@ -205,14 +285,15 @@ class NapBuddyHUD:
       messages.append(self.tesla_can.create_lane_message(
         self.lane_width, self.right_line, self.left_line, 50,
         self.curv[0], self.curv[1], self.curv[2], self.curv[3],
-        self.left_quality, self.right_quality, CHASSIS_BUS, 1,
+        self.left_quality, self.right_quality, CHASSIS_BUS, self.lanes_idx,
       ))
+      self.lanes_idx = (self.lanes_idx + 1) % 16
       messages.append(self.tesla_can.create_telemetry_road_info(
         self.left_line, self.right_line,
         self.left_quality, self.right_quality, 0, CHASSIS_BUS,
       ))
       messages.append(self._lead_frame(CC_SP))
-      self._status_frames(CC, CS, messages)
+      self._status_frames(CC, CC_SP, CS, messages)
 
       # NAP Buddy status frame. Carries display state for the bridge.
       messages.append(self.tesla_can.create_fake_DAS_msg(
@@ -233,7 +314,7 @@ class NapBuddyHUD:
         0,                     # legal speed limit: no map source
         0.0,                   # apply angle: steering is not driven from here
         0,                     # enable steer control: likewise
-        1 if nap_conf.use_pedal else 0,
+        1 if self._pedal_cached else 0,
         0 if enabled else 1,
         CHASSIS_BUS,
       ))
