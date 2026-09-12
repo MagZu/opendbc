@@ -201,6 +201,7 @@ class CarControlSP:
   intelligentCruiseButtonManagement: 'IntelligentCruiseButtonManagement' = field(default_factory=lambda: IntelligentCruiseButtonManagement())
   napBuddyLanes: 'NapBuddyLanes' = field(default_factory=lambda: NapBuddyLanes())
   napBuddySpeedLimit: float = auto_field()
+  napBuddyEngageable: bool = auto_field()
 
   @auto_dataclass
   class Param:

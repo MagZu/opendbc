@@ -63,7 +63,7 @@ class NapBuddyHUD:
 
     self.tick = 0
     self.warning_ticks = 0
-    self.prev_enabled = False
+    self.prev_steering = False
 
     # Toggle is polled, not read every tick. Start False so nothing is emitted
     # before the first read.
@@ -184,22 +184,25 @@ class NapBuddyHUD:
   def _status_frames(self, CC, CC_SP, CS, messages):
     """DAS_status / DAS_status2 — the AP status area of the cluster."""
     hud = CC.hudControl
-    enabled = CC.enabled
+
+    # The cluster's wheel tracks *steering*, not full engagement. With MADS the
+    # car can be steering with cruise off (autosteer-only), where CC.enabled is
+    # False -- keying off it drops the wheel whenever cruise is not engaged.
+    steering = bool(CC.latActive)
 
     # DAS_op_status, per the Tesla encoding:
     #   0 disabled  1 unavailable  2 available  3 active nominal
     #   4 active restricted  5 active nav  8 aborting  9 aborted  14 fault
-    # The cluster draws the steering wheel grey on 1 (unavailable) and lights it
-    # once openpilot is actually steering. MADS availability is the closest thing
-    # the car layer has to controlsd's "engageable".
-    engageable = bool(getattr(getattr(CC_SP, "mads", None), "available", False))
-    if enabled:
+    # The cluster draws the steering wheel grey on 2 (available) and lights it
+    # blue on 5. 1 (unavailable) draws nothing.
+    engageable = bool(getattr(CC_SP, "napBuddyEngageable", False))
+    if steering:
       op_status = 5
     elif engageable:
       op_status = 2
     else:
       op_status = 1
-    csa_state = 2 if enabled else (1 if engageable else 0)
+    csa_state = 2 if steering else (1 if engageable else 0)
 
     collision_warning = 1 if hud.visualAlert == VisualAlert.fcw else 0
 
@@ -209,7 +212,7 @@ class NapBuddyHUD:
     hands_on_state = 2
     if hud.visualAlert == VisualAlert.steerRequired:
       hands_on_state = 3
-    elif enabled and CS.out.steeringPressed:
+    elif steering and CS.out.steeringPressed:
       hands_on_state = 3
 
     # Set speed readout. Only meaningful while cruise is actually engaged;
@@ -262,12 +265,13 @@ class NapBuddyHUD:
 
     messages = []
     if not self.enabled:
-      self.prev_enabled = CC.enabled
+      self.prev_steering = bool(CC.latActive)
       return messages
 
-    enabled = CC.enabled
+    # Same signal the cluster wheel uses -- see _status_frames.
+    steering = bool(CC.latActive)
     hud = CC.hudControl
-    disengage_edge = self.prev_enabled and not enabled
+    disengage_edge = self.prev_steering and not steering
 
     self._update_lanes(CC_SP)
     self._update_speed_limit(CC_SP)
@@ -297,17 +301,17 @@ class NapBuddyHUD:
 
       # NAP Buddy status frame. Carries display state for the bridge.
       messages.append(self.tesla_can.create_fake_DAS_msg(
-        1 if enabled else 0,   # speed control enabled
+        1 if steering else 0,  # speed control enabled
         0,                     # speed override
-        0 if enabled else 1,   # AP unavailable
+        0 if steering else 1,  # AP unavailable
         1 if hud.visualAlert == VisualAlert.fcw else 0,
-        5 if enabled else 2,   # op status
+        5 if steering else 2,  # op status
         max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH),
         0,                     # turn signal needed
         1 if hud.visualAlert == VisualAlert.fcw else 0,
         1,                     # adaptive cruise available
         0,                     # hands on state
-        2 if enabled else 0,   # cc state
+        2 if steering else 0,  # cc state
         1,                     # pedal available
         1,                     # alca state: unavailable
         max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH),
@@ -315,7 +319,7 @@ class NapBuddyHUD:
         0.0,                   # apply angle: steering is not driven from here
         0,                     # enable steer control: likewise
         1 if self._pedal_cached else 0,
-        0 if enabled else 1,
+        0 if steering else 1,
         CHASSIS_BUS,
       ))
 
@@ -338,5 +342,5 @@ class NapBuddyHUD:
         0, 0, 0, 0, 0, 0, 0, 0, CHASSIS_BUS,
       ))
 
-    self.prev_enabled = enabled
+    self.prev_steering = steering
     return messages
