@@ -22,6 +22,11 @@ class NAPParamKeys:
   PEDAL_CALIB_FACTOR = "NAPPedalCalibFactor"
   PEDAL_CALIB_ZERO = "NAPPedalCalibZero"
 
+  # NAP Buddy IC integration — renders openpilot lanes / lead car / status on
+  # the stock Tesla instrument cluster via the NAP Buddy bridge. Display-only.
+  # Default off: needs NAP Buddy hardware, and does nothing without it.
+  BUDDY_IC_INTEGRATION = "NAPBuddyICIntegration"
+
   # Radar
   RADAR_ENABLED = "NAPRadarEnabled"
   RADAR_HUD = "NAPRadarHud"

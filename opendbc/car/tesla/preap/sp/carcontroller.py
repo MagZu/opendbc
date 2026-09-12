@@ -4,6 +4,7 @@ from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.lateral import apply_steer_angle_limits_vm
 from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
 from opendbc.car.tesla.preap.constants import get_hands_on_disengage_level
+from opendbc.car.tesla.preap.hud_module import NapBuddyHUD
 from opendbc.car.tesla.preap.nap_conf import nap_conf
 from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
 from opendbc.car.tesla.values import CANBUS, CarControllerParams
@@ -29,13 +30,15 @@ class PreAPCarController(CarControllerBase):
     self.stock_cc = StockCCSpoofer()
     self.tesla_can = init_preap_can(dbc_names, self.packers)
     self.radar_vin_idx = 0
+    # NAP Buddy IC integration. Display-only, and a no-op unless the
+    # NAPBuddyICIntegration toggle is on (default off).
+    self.nap_buddy_hud = NapBuddyHUD(CP, self.tesla_can)
 
     from opendbc.car.tesla.interface import CarInterface
     # Same CarSpecs as NAP's HW3 VehicleModel; PREAP is the wired candidate.
     self.VM = VehicleModel(CarInterface.get_non_essential_params("TESLA_MODEL_S_PREAP"))
 
   def update(self, CC, CC_SP, CS, now_nanos):
-    del CC_SP
     actuators = CC.actuators
     can_sends = []
 
@@ -91,6 +94,9 @@ class PreAPCarController(CarControllerBase):
       turn = int(CC.rightBlinker) * 2 + int(CC.leftBlinker)
       cntr = (self.frame // 10) % 16
       can_sends.append(self.tesla_can.create_body_controls_message(turn, 0, CANBUS.party, cntr))
+
+    # NAP Buddy IC frames. Display-only; returns nothing while the toggle is off.
+    can_sends.extend(self.nap_buddy_hud.update(CC, CC_SP, CS))
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_angle_last

@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
   'pedal_calib_max': 99.6,
   'pedal_calib_zero': 0.0,
   'pedal_calib_factor': 1.0,
+  'buddy_ic_integration': False,
   'radar_enabled': False,
   'radar_ignore_hw_fail': False,
   'radar_behind_nosecone': False,
@@ -193,6 +194,15 @@ class NAPConf:
     self._put(json_key, text)
 
   # Bool properties
+
+  @property
+  def buddy_ic_integration(self):
+    """NAP Buddy IC integration — display-only cluster rendering. Default off."""
+    return self._get_param_bool(NAPParamKeys.BUDDY_IC_INTEGRATION, 'buddy_ic_integration')
+
+  @buddy_ic_integration.setter
+  def buddy_ic_integration(self, value):
+    self._put_param_bool(NAPParamKeys.BUDDY_IC_INTEGRATION, 'buddy_ic_integration', value)
 
   @property
   def use_pedal(self):
