@@ -172,12 +172,34 @@ class LeadData:
 
 
 @auto_dataclass
+class NapBuddyLanes:
+  """Lane geometry for NAP Buddy instrument cluster rendering.
+
+  Cubic path coefficients and lane-line probabilities, computed in the
+  openpilot layer where modelV2 is available. Keeps the car layer free of any
+  model dependency. valid is False until the openpilot side publishes it, in
+  which case the cluster draws a flat path.
+  """
+  valid: bool = auto_field()
+  laneWidth: float = auto_field()
+  leftLaneProb: float = auto_field()
+  rightLaneProb: float = auto_field()
+  leftEdgeProb: float = auto_field()
+  rightEdgeProb: float = auto_field()
+  c0: float = auto_field()
+  c1: float = auto_field()
+  c2: float = auto_field()
+  c3: float = auto_field()
+
+
+@auto_dataclass
 class CarControlSP:
   mads: 'ModularAssistiveDrivingSystem' = field(default_factory=lambda: ModularAssistiveDrivingSystem())
   params: list['CarControlSP.Param'] = auto_field()
   leadOne: 'LeadData' = field(default_factory=lambda: LeadData())
   leadTwo: 'LeadData' = field(default_factory=lambda: LeadData())
   intelligentCruiseButtonManagement: 'IntelligentCruiseButtonManagement' = field(default_factory=lambda: IntelligentCruiseButtonManagement())
+  napBuddyLanes: 'NapBuddyLanes' = field(default_factory=lambda: NapBuddyLanes())
 
   @auto_dataclass
   class Param:

@@ -83,23 +83,23 @@ class NapBuddyHUD:
     the cluster gets a straight, flat path — lanes simply do not curve.
     """
     lanes = getattr(CC_SP, "napBuddyLanes", None)
-    if lanes is None:
+    if lanes is None or not getattr(lanes, "valid", False):
+      # No usable fit this tick. Keep the last good path rather than snapping
+      # the drawn lane to zero on a single dropped model frame.
       return
 
-    self.lane_width = float(getattr(lanes, "laneWidth", 4.0)) or 4.0
-    l_prob = float(getattr(lanes, "leftLaneProb", 0.0))
-    r_prob = float(getattr(lanes, "rightLaneProb", 0.0))
-    self.left_line = 1 if l_prob > LANE_LINE_PROB else 0
-    self.right_line = 1 if r_prob > LANE_LINE_PROB else 0
-    self.left_quality = 1 if float(getattr(lanes, "leftEdgeProb", 0.0)) > LANE_QUALITY_PROB else 0
-    self.right_quality = 1 if float(getattr(lanes, "rightEdgeProb", 0.0)) > LANE_QUALITY_PROB else 0
+    self.lane_width = float(lanes.laneWidth) or 4.0
+    self.left_line = 1 if float(lanes.leftLaneProb) > LANE_LINE_PROB else 0
+    self.right_line = 1 if float(lanes.rightLaneProb) > LANE_LINE_PROB else 0
+    self.left_quality = 1 if float(lanes.leftEdgeProb) > LANE_QUALITY_PROB else 0
+    self.right_quality = 1 if float(lanes.rightEdgeProb) > LANE_QUALITY_PROB else 0
 
     # Bounds match what the DAS_lanes signals can represent.
     self.curv = [
-      _clip(float(getattr(lanes, "c0", 0.0)), -3.5, 3.5),
-      _clip(float(getattr(lanes, "c1", 0.0)), -0.2, 0.2),
-      _clip(float(getattr(lanes, "c2", 0.0)), -0.0025, 0.0025),
-      _clip(float(getattr(lanes, "c3", 0.0)), -0.00003, 0.00003),
+      _clip(float(lanes.c0), -3.5, 3.5),
+      _clip(float(lanes.c1), -0.2, 0.2),
+      _clip(float(lanes.c2), -0.0025, 0.0025),
+      _clip(float(lanes.c3), -0.00003, 0.00003),
     ]
 
   def _lead_frame(self, CC_SP):
