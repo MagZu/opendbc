@@ -149,7 +149,9 @@ class NAPConf:
 
   def _put_param_bool(self, param_key, json_key, value):
     if _PARAMS_AVAILABLE:
-      _params.put_bool_nonblocking(param_key, bool(value))
+      # 0.11.2 folded put_bool_nonblocking into put_bool(block=False), which is
+      # the default. The old name raises AttributeError on every bool setter.
+      _params.put_bool(param_key, bool(value))
     self._put(json_key, bool(value))
 
   def _get_param_float(self, param_key, json_key, default):
