@@ -60,6 +60,10 @@ class TeslaCANPreAP(TeslaCANRaven):
     self.pedal_idx = 0
     # STW_ACTN_RQ uses CRC-8 (poly 0x1D), not the byte-sum checksum
     self.stw_crc = crcmod.mkCrcFun(0x11d, initCrc=0x00, rev=False, xorOut=0xff)
+    # NAP Buddy IC frame counters. DAS_status and DAS_status2 carry their own
+    # rolling counter, which the cluster checks for continuity.
+    self.das_status_idx = 0
+    self.das_status2_idx = 0
 
   @staticmethod
   def pedal_checksum(msg_id, dat):
