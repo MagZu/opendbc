@@ -1065,6 +1065,14 @@ class SafetyTest(SafetyTestBase):
         # TODO: this should be blocked
         if current_test in ["TestNissanSafety", "TestNissanSafetyAltEpsBus", "TestNissanLeafSafety"] and [addr, bus] in self.TX_MSGS:
           continue
+        # Tesla Pre-AP transmits DAS_status2 (0x389) for NAP Buddy instrument
+        # cluster rendering, which collides with Hyundai SCC14 on bus 0. The
+        # address is already a known cross-platform clash - Hyundai excludes it
+        # among its own variants above. A car is a Tesla or a Hyundai, never
+        # both, so the overlap is coincidental. Guarded by the TX_MSGS check, so
+        # this only skips addresses Pre-AP legitimately transmits.
+        if current_test in ["TestTeslaPreAPSteeringOnly", "TestTeslaPreAPWithPedal"] and [addr, bus] in self.TX_MSGS:
+          continue
         self.assertFalse(self._tx(msg), f"transmit of {addr=:#x} {bus=} from {test_name} during {current_test} was allowed")
 
 
