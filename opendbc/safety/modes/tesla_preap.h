@@ -992,6 +992,15 @@ static safety_config tesla_preap_init(uint16_t param) {
     {0x389, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_status2
     {0x399, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_status
     {0x3A9, 0, 8, .check_relay = false, .disable_static_blocking = true},  // DAS_telemetry
+    // NAP Buddy status2 (0x65A), the Tinkla 0.6.6 companion to 0x659. Carries
+    // fleet-speed state for the cluster's speed widget plus high/low beam
+    // status. Like 0x659 it is a Buddy frame, not a Tesla DAS frame: no ECU on
+    // this car consumes it, and it has no actuation path.
+    {0x65A, 0, 3, .check_relay = false, .disable_static_blocking = true},  // NAP Buddy status2
+    // Tinkla 0.6.6 bridge-control frames: 0x649 host-awake keepalive and 0x018
+    // bridge-enabled flag. Buddy frames, no ECU consumer, no actuation path.
+    {0x649, 0, 8, .check_relay = false, .disable_static_blocking = true},  // NAP Buddy keepalive
+    {0x018, 0, 1, .check_relay = false, .disable_static_blocking = true},  // NAP Buddy eth enable
     // 0x659 is not UDS despite the arb-ID: a NAP Buddy status frame carrying
     // display state. It echoes apply_angle / enable_steer_control for the
     // bridge, but actuation stays on DAS_steeringControl (0x488) - nothing

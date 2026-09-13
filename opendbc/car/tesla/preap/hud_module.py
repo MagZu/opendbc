@@ -370,7 +370,21 @@ class NapBuddyHUD:
       # openpilot was merely idle-but-engageable, which is what kept the grey
       # wheel from ever appearing. And the speed bytes took the raw setSpeed,
       # so V_CRUISE_UNSET went out as a literal 255 in byte 1.
-      ap_available = st["steering"] or st["engageable"]
+      # Draw the AP widget only while openpilot is actually steering.
+      #
+      # The bridge draws the wheel and the set-speed widget together -- both are
+      # gated on adaptive_cruise=1 AND cc_state in {2,3} -- and every state that
+      # draws them also asserts cruise is active, so the cluster reports cruise
+      # on and renders the set speed blue. Nothing we can send changes that: the
+      # whole of 0x659, DAS_status2 csaState and accSpeedLimit, DAS_control
+      # accState, fleetSpeedState, and 0.6.6's 0x65A / keepalive / eth-enable
+      # frames were all swept with the widget drawn, and it stayed blue.
+      #
+      # cc_state 1 (available) is the state that would render it grey, and it
+      # draws nothing at all here. So a grey "available" wheel is not reachable,
+      # and a permanently blue set speed while idle is worse than an empty
+      # cluster. Show nothing until openpilot steers.
+      ap_available = st["steering"]
 
       # The bridge's AP widget -- steering wheel included -- is drawn from these
       # fields, not from DAS_status. op_status was correct all along and simply
@@ -398,6 +412,7 @@ class NapBuddyHUD:
       cc_state = 0
       if ap_available:
         cc_state = 2 if cruise_active else 3
+      # Nothing is drawn while idle, so the readout only matters when steering.
       acc_speed = st["set_speed_kph"]
 
       speed_control_enabled = self._debug.get("speed_control_enabled", speed_control_enabled)
@@ -442,6 +457,21 @@ class NapBuddyHUD:
       )
       if not self._debug.get("suppress_659", 0):
         messages.append(fake_das)
+
+      # Tinkla 0.6.6 companion frame. Opt-in while we establish whether the
+      # bridge needs it; 0x65A is not in the panda TX whitelist yet.
+      if self._debug.get("buddy_bridge", 0):
+        # 0.6.6 sends these unconditionally: the bridge may need them to leave
+        # its default mode. eth-enable at 5 Hz, keepalive at 1 Hz.
+        if self.tick % 20 == 0:
+          messages.append(self.tesla_can.create_buddy_eth_enable(1, CHASSIS_BUS))
+        if self.tick % 100 == 0:
+          messages.append(self.tesla_can.create_buddy_keepalive(CHASSIS_BUS))
+
+      if self._debug.get("das_msg2", 0):
+        messages.append(self.tesla_can.create_fake_DAS_msg2(
+          0, 0, 0, self._debug.get("fleet_speed_state2", 1), CHASSIS_BUS,
+        ))
 
     # --- 1 Hz block --------------------------------------------------------
     # DAS_bodyControls (0x3E9) is deliberately NOT sent here. PreAPCarController

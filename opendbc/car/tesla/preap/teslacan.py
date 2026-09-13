@@ -15,6 +15,13 @@ DAS_STATUS2_MSG_ID = 0x389
 DAS_STATUS_MSG_ID = 0x399
 # Not UDS despite the arb-ID: NAP Buddy status/display frame.
 NAP_BUDDY_STATUS_MSG_ID = 0x659
+# Tinkla 0.6.6 companion frame to 0x659, carrying fleet-speed state. That era
+# drove the cluster through 0x659/0x65A/0x557 rather than the real DAS frames.
+NAP_BUDDY_STATUS2_MSG_ID = 0x65A
+# Tinkla 0.6.6 bridge-control frames: a 1 Hz keepalive telling the Buddy the
+# host is awake, and a 5 Hz "bridge enabled" flag. Neither is a Tesla frame.
+NAP_BUDDY_KEEPALIVE_MSG_ID = 0x649
+NAP_BUDDY_ETH_ENABLE_MSG_ID = 0x018
 
 # Comma Pedal protocol constants
 PEDAL_M1 = 0.050796813    # Primary scaling factor
@@ -359,6 +366,31 @@ class TeslaCANPreAP(TeslaCANRaven):
     data = self.packers[CANBUS.party].make_can_msg("DAS_status2", bus, values)[1]
     values["DAS_status2Checksum"] = self.checksum(DAS_STATUS2_MSG_ID, data[:7])
     return self.packers[CANBUS.party].make_can_msg("DAS_status2", bus, values)
+
+  @staticmethod
+  def create_buddy_keepalive(bus):
+    """0x649 — Tinkla 0.6.6 create_fake_IC_msg: 1 Hz "host is awake" heartbeat."""
+    return (NAP_BUDDY_KEEPALIVE_MSG_ID,
+            bytes((0xFF, 0xFF, 0x01, 0x02, 0x03, 0x04, 0xFF, 0x00)), bus)
+
+  @staticmethod
+  def create_buddy_eth_enable(status, bus):
+    """0x018 — Tinkla 0.6.6 create_enabled_eth_msg: bridge-enabled flag, 5 Hz."""
+    return (NAP_BUDDY_ETH_ENABLE_MSG_ID, bytes((status & 0xFF,)), bus)
+
+  def create_fake_DAS_msg2(self, hi_lo_beam_status, hi_lo_beam_reason, ahb_enabled,
+                           fleet_speed_state, bus):
+    """0x65A — Tinkla 0.6.6 Buddy frame (create_fake_DAS_msg2), 3 bytes.
+
+    fleet_speed_state: 0 unavailable, 1 available, 2 enabled. 0.6.6 sent this
+    alongside 0x659 at 20 Hz; it is not a Tesla DAS frame.
+    """
+    dat = bytes((
+      hi_lo_beam_status & 0xFF,
+      hi_lo_beam_reason & 0xFF,
+      ((1 if ahb_enabled else 0) + ((fleet_speed_state & 0x7F) << 1)) & 0xFF,
+    ))
+    return (NAP_BUDDY_STATUS2_MSG_ID, dat, bus)
 
   def create_fake_DAS_msg(self, speed_control_enabled, speed_override, apUnavailable,
                            collision_warning, op_status, acc_speed_kph,

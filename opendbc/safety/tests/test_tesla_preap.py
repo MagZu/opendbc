@@ -95,6 +95,9 @@ class TeslaPreAPTestMixin(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     [0x399, 0],  # DAS_status
     [0x3A9, 0],  # DAS_telemetry
     [0x659, 0],  # NAP Buddy status frame
+    [0x65A, 0],  # NAP Buddy status2 (fleet speed / beams)
+    [0x649, 0],  # NAP Buddy keepalive
+    [0x018, 0],  # NAP Buddy eth enable
   ]
 
   STANDSTILL_THRESHOLD = 0.5 / 3.6  # 0.5 kph in m/s
