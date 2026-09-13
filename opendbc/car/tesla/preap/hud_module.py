@@ -281,7 +281,8 @@ class NapBuddyHUD:
       0,                  # blindSpotLeft  — no BSM source on Pre-AP
       0,                  # blindSpotRight
       self.speed_limit_kph,
-      1 if self.speed_limit_kph > 0 else 0,  # DAS_fleetSpeedState
+      self._debug.get("fleet_speed_state",
+                      1 if self.speed_limit_kph > 0 else 0),  # DAS_fleetSpeedState
       CHASSIS_BUS,
     ))
     if "das_status2_speed" in self._debug:
@@ -354,7 +355,13 @@ class NapBuddyHUD:
         self.left_road_edge, self.right_road_edge,
       ))
       messages.append(self._lead_frame(CC_SP))
-      st = self._status_frames(CC, CC_SP, CS, messages)
+      # The Tinkla reference only emits DAS_status/DAS_status2 while engaged; we
+      # emit them always. Suppressible so that difference can be tested -- the
+      # bridge may interpret 0x659 differently when the real AP frames are present.
+      status_msgs = []
+      st = self._status_frames(CC, CC_SP, CS, status_msgs)
+      if not self._debug.get("suppress_status", 0):
+        messages.extend(status_msgs)
 
       # NAP Buddy status frame. This is what the bridge renders from, so it has
       # to agree with the cluster frames -- it previously recomputed its own
