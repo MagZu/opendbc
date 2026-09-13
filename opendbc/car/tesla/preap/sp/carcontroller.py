@@ -11,6 +11,9 @@ from opendbc.car.tesla.preap.stock_cc_spoofer import StockCCSpoofer
 from opendbc.car.tesla.values import CANBUS, CarControllerParams
 from opendbc.car.vehicle_model import VehicleModel
 
+# 1 Hz at the 100 Hz control loop.
+RADAR_CFG_POLL_FRAMES = 100
+
 
 class PreAPCarController(CarControllerBase):
   def __init__(self, dbc_names, CP, CP_SP):
@@ -31,6 +34,7 @@ class PreAPCarController(CarControllerBase):
     self.stock_cc = StockCCSpoofer()
     self.tesla_can = init_preap_can(dbc_names, self.packers)
     self.radar_vin_idx = 0
+    self._radar_cfg = None
     # NAP Buddy IC integration. Display-only, and a no-op unless the
     # NAPBuddyICIntegration toggle is on (default off).
     self.nap_buddy_hud = NapBuddyHUD(CP, self.tesla_can)
@@ -79,10 +83,20 @@ class PreAPCarController(CarControllerBase):
     # when radar is on. Empty VIN is 17 spaces (this-car passthrough);
     # position and EPAS still apply. Panda stays silent until all three
     # fragments arrive, so 10 Hz keeps that pause around 300 ms.
-    if nap_conf.radar_enabled and self.frame % 10 == 0:
+    # nap_conf reads go to the params filesystem and this loop runs at 100 Hz.
+    # radar_enabled came first in the condition, so it short-circuited ahead of
+    # the frame check and was read every frame -- 100 reads/sec for a setting
+    # that does not change while driving. Poll the whole config at 1 Hz, and
+    # only on a fragment-cycle boundary: re-reading the VIN per fragment meant a
+    # change mid-cycle would splice two different VINs into one reassembly.
+    if self._radar_cfg is None or (self.frame % RADAR_CFG_POLL_FRAMES == 0 and self.radar_vin_idx == 0):
+      self._radar_cfg = (nap_conf.radar_enabled, nap_conf.radar_donor_vin,
+                         nap_conf.radar_position, nap_conf.radar_epas_type)
+
+    if self.frame % 10 == 0 and self._radar_cfg[0]:
       can_sends.append(self.tesla_can.create_radar_vin_msg(
-        self.radar_vin_idx, nap_conf.radar_donor_vin, True,
-        nap_conf.radar_position, nap_conf.radar_epas_type,
+        self.radar_vin_idx, self._radar_cfg[1], True,
+        self._radar_cfg[2], self._radar_cfg[3],
       ))
       self.radar_vin_idx = (self.radar_vin_idx + 1) % 3
 

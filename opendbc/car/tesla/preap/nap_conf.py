@@ -3,6 +3,7 @@
 import json
 import os
 import tempfile
+import time
 
 from opendbc.car.carlog import carlog
 from opendbc.car.tesla.preap.nap_params import NAPParamKeys
@@ -18,6 +19,13 @@ carlog.info("nap_conf: _PARAMS_AVAILABLE=%s", _PARAMS_AVAILABLE)
 
 
 CONFIG_FILE = "/data/nap_params.json"
+# Params are filesystem-backed, and the car layer reads them from the 100 Hz
+# control loop -- carstate alone reads use_pedal four times in a single pass,
+# so a frame cost on the order of ten reads and the loop ~1000/sec. Memoise
+# for a short window so a frame costs at most one read per key. The TTL bounds
+# how stale a UI toggle can be; 0.2 s is well below what a person notices, and
+# writes through this class invalidate their own key immediately.
+PARAM_CACHE_TTL = 0.2
 # Dev-only display-field overrides; absent in normal use.
 OP_STATUS_DEBUG_FILE = "/data/nap_buddy_debug"
 
@@ -99,6 +107,7 @@ class NAPConf:
 
   def __init__(self):
     self._cache = {}
+    self._param_cache: dict[str, tuple[float, object]] = {}
     self._load()
 
   # Storage
@@ -144,12 +153,26 @@ class NAPConf:
 
   # Params helpers
 
+  def _param_cached(self, param_key, reader):
+    """Read a param at most once per PARAM_CACHE_TTL. See the constant."""
+    now = time.monotonic()
+    hit = self._param_cache.get(param_key)
+    if hit is not None and (now - hit[0]) < PARAM_CACHE_TTL:
+      return hit[1]
+    value = reader()
+    self._param_cache[param_key] = (now, value)
+    return value
+
+  def _param_invalidate(self, param_key):
+    self._param_cache.pop(param_key, None)
+
   def _get_param_bool(self, param_key, json_key, default=False):
     if _PARAMS_AVAILABLE:
-      return _params.get_bool(param_key)
+      return self._param_cached(param_key, lambda: _params.get_bool(param_key))
     return self._get(json_key, default)
 
   def _put_param_bool(self, param_key, json_key, value):
+    self._param_invalidate(param_key)
     if _PARAMS_AVAILABLE:
       # 0.11.2 folded put_bool_nonblocking into put_bool(block=False), which is
       # the default. The old name raises AttributeError on every bool setter.
@@ -158,40 +181,49 @@ class NAPConf:
 
   def _get_param_float(self, param_key, json_key, default):
     if _PARAMS_AVAILABLE:
-      val = _params.get(param_key, return_default=True)
-      return float(val) if val is not None else default
+      def read():
+        val = _params.get(param_key, return_default=True)
+        return float(val) if val is not None else default
+      return self._param_cached(param_key, read)
     return float(self._get(json_key, default))
 
   def _put_param_float(self, param_key, json_key, value):
+    self._param_invalidate(param_key)
     if _PARAMS_AVAILABLE:
       _params.put(param_key, float(value))
     self._put(json_key, float(value))
 
   def _get_param_int(self, param_key, json_key, default):
     if _PARAMS_AVAILABLE:
-      val = _params.get(param_key, return_default=True)
-      try:
-        return int(val)
-      except (TypeError, ValueError):
-        return default
+      def read():
+        val = _params.get(param_key, return_default=True)
+        try:
+          return int(val)
+        except (TypeError, ValueError):
+          return default
+      return self._param_cached(param_key, read)
     return int(self._get(json_key, default))
 
   def _put_param_int(self, param_key, json_key, value):
+    self._param_invalidate(param_key)
     if _PARAMS_AVAILABLE:
       _params.put(param_key, int(value))
     self._put(json_key, int(value))
 
   def _get_param_str(self, param_key, json_key, default=""):
     if _PARAMS_AVAILABLE:
-      val = _params.get(param_key, return_default=True)
-      if val is None:
-        return default
-      if isinstance(val, bytes):
-        return val.decode("ascii", errors="ignore")
-      return str(val)
+      def read():
+        val = _params.get(param_key, return_default=True)
+        if val is None:
+          return default
+        if isinstance(val, bytes):
+          return val.decode("ascii", errors="ignore")
+        return str(val)
+      return self._param_cached(param_key, read)
     return str(self._get(json_key, default))
 
   def _put_param_str(self, param_key, json_key, value):
+    self._param_invalidate(param_key)
     text = str(value)
     if _PARAMS_AVAILABLE:
       _params.put(param_key, text)
