@@ -436,7 +436,11 @@ class NapBuddyHUD:
       # rounds. Since the widget is drawn whenever the wheel is, give it the
       # current speed when there is no set speed, as the Tinkla reference does
       # with v_cruise_pcm, rather than a meaningless 0.
-      acc_speed_limit = st["set_speed_kph"] if cruise_active else st["v_ego_kph"]
+      # Floor of 1 with no set speed: sending 0 makes the bridge fall back to the
+      # car's own remembered cruise speed, so a stationary car showed a stale
+      # number (e.g. 30) instead of tracking us. 1 is the smallest value that
+      # still reads as ours.
+      acc_speed_limit = st["set_speed_kph"] if cruise_active else max(1.0, st["v_ego_kph"])
       acc_speed_limit = self._debug.get("acc_speed_limit", acc_speed_limit)
       pcc_available = self._debug.get("pcc_available", 1)
       units_included = self._debug.get("units_included", 1)
