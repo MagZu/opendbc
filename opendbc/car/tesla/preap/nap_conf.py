@@ -18,6 +18,8 @@ carlog.info("nap_conf: _PARAMS_AVAILABLE=%s", _PARAMS_AVAILABLE)
 
 
 CONFIG_FILE = "/data/nap_params.json"
+# Dev-only override for the cluster AP-status encoding; absent in normal use.
+OP_STATUS_DEBUG_FILE = "/data/nap_buddy_op_status_debug"
 
 DEFAULT_CONFIG = {
   'double_pull_window_ms': 400,
@@ -205,6 +207,21 @@ class NAPConf:
   @buddy_ic_integration.setter
   def buddy_ic_integration(self, value):
     self._put_param_bool(NAPParamKeys.BUDDY_IC_INTEGRATION, 'buddy_ic_integration', value)
+
+  @property
+  def buddy_ic_op_status_debug(self):
+    """Force DAS_autopilotState to a fixed value. -1 (the default) means no override.
+
+    Dev aid for identifying which encoding this cluster draws the grey wheel on.
+    Deliberately a plain file rather than a param: adding a params key means
+    registering it in params_keys.h and rebuilding, and this is temporary. Write
+    a value 0-15 to OP_STATUS_DEBUG_FILE to force it, remove the file to stop.
+    """
+    try:
+      with open(OP_STATUS_DEBUG_FILE) as f:
+        return max(-1, min(15, int(f.read().strip())))
+    except (OSError, ValueError):
+      return -1
 
   @property
   def use_pedal(self):

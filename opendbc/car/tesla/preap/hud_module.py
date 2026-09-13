@@ -29,6 +29,12 @@ from opendbc.car import structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.preap.nap_conf import nap_conf
 
+# DAS_status2.DAS_accSpeedLimit is a 10-bit mph signal at 0.2 scale. The packer
+# takes physical units, so SNA (raw 1023) is 1023 * 0.2 mph.
+DAS_ACC_SPEED_SNA = 204.6
+# openpilot's "no set speed" sentinel, V_CRUISE_UNSET in selfdrive/car/cruise.py.
+V_CRUISE_UNSET_KPH = 250.0
+
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 
 # Pre-AP renders on chassis bus 0.
@@ -68,6 +74,7 @@ class NapBuddyHUD:
     # Toggle is polled, not read every tick. Start False so nothing is emitted
     # before the first read.
     self._enabled_cached = False
+    self._op_status_debug = -1
     self._pedal_cached = False
     self._toggle_ticks = 0
 
@@ -102,6 +109,7 @@ class NapBuddyHUD:
       self._enabled_cached = nap_conf.buddy_ic_integration
       # Polled here too rather than read per-frame; it only feeds a display bit.
       self._pedal_cached = nap_conf.use_pedal
+      self._op_status_debug = nap_conf.buddy_ic_op_status_debug
     self._toggle_ticks -= 1
     return self._enabled_cached
 
@@ -204,24 +212,38 @@ class NapBuddyHUD:
       op_status = 1
     csa_state = 2 if steering else (1 if engageable else 0)
 
+    # Dev override for identifying the cluster's grey-wheel encoding. -1 = off.
+    if self._op_status_debug >= 0:
+      op_status = self._op_status_debug
+
     collision_warning = 1 if hud.visualAlert == VisualAlert.fcw else 0
 
     # DAS_hands_on_state: 2 is the normal "hands detected" state. 3 flashes the
     # lamp at the top of the cluster when the driver is overriding or openpilot
     # is asking for hands. 0 is not a valid resting value.
-    hands_on_state = 2
+    # 2 means "hands required, not detected". Reporting that while openpilot is
+    # not steering contradicts op_status and may suppress the cluster's own
+    # availability drawing, so report "not required" until it actually steers.
+    hands_on_state = 2 if steering else 0
     if hud.visualAlert == VisualAlert.steerRequired:
       hands_on_state = 3
     elif steering and CS.out.steeringPressed:
       hands_on_state = 3
 
-    # Set speed readout. Only meaningful while cruise is actually engaged;
-    # showing it otherwise puts a number on the cluster the car is not holding.
-    set_speed = 0.0
+    # Set speed readout. DAS_accSpeedLimit is mph at 0.2 scale -- feeding it kph
+    # overstates the number by 1.6x. The DBC calls raw 0 "NONE", but the cluster
+    # renders that as a bogus max readout instead of hiding the field, so send
+    # the documented SNA whenever there is no set speed to show.
+    set_speed = DAS_ACC_SPEED_SNA
     if CS.out.cruiseState.enabled:
-      set_speed = max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH)
-      if set_speed > 250:  # SNA / not set
-        set_speed = 0.0
+      v_kph = max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH)
+      # openpilot parks hudControl.setSpeed at V_CRUISE_UNSET (255 kph) when no
+      # speed is set. Converted to mph that is 158.4, which looks like a real
+      # value -- it is what put "255" on the cluster. Only show a genuine speed,
+      # which also keeps the readout off under autosteer-only, where the pre-AP
+      # spoofer reports cruiseState.enabled with no set speed.
+      if 0.0 < v_kph < V_CRUISE_UNSET_KPH:
+        set_speed = v_kph * CV.KPH_TO_MPH
 
     # DAS_alca_state, from lane availability:
     #   1 unavailable (no lanes)  6 left only  7 right only  8 both

@@ -1,5 +1,6 @@
 from opendbc.can import CANPacker
 from opendbc.car import Bus
+from opendbc.car.carlog import carlog
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.lateral import apply_steer_angle_limits_vm
 from opendbc.car.tesla.preap.carcontroller import PreAPLongController, init_preap_can
@@ -33,6 +34,7 @@ class PreAPCarController(CarControllerBase):
     # NAP Buddy IC integration. Display-only, and a no-op unless the
     # NAPBuddyICIntegration toggle is on (default off).
     self.nap_buddy_hud = NapBuddyHUD(CP, self.tesla_can)
+    self.nap_buddy_faults = 0
 
     from opendbc.car.tesla.interface import CarInterface
     # Same CarSpecs as NAP's HW3 VehicleModel; PREAP is the wired candidate.
@@ -96,7 +98,15 @@ class PreAPCarController(CarControllerBase):
       can_sends.append(self.tesla_can.create_body_controls_message(turn, 0, CANBUS.party, cntr))
 
     # NAP Buddy IC frames. Display-only; returns nothing while the toggle is off.
-    can_sends.extend(self.nap_buddy_hud.update(CC, CC_SP, CS))
+    # Contained deliberately: this renders to the instrument cluster and must
+    # never be able to break car control. Anything raising in here degrades to
+    # "no cluster rendering" instead of taking the control loop down with it.
+    try:
+      can_sends.extend(self.nap_buddy_hud.update(CC, CC_SP, CS))
+    except Exception:
+      if self.nap_buddy_faults % 1000 == 0:  # ~10s at 100Hz
+        carlog.exception("nap_buddy_hud raised; skipping IC frames")
+      self.nap_buddy_faults += 1
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_angle_last
