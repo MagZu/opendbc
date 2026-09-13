@@ -398,7 +398,7 @@ class TeslaCANPreAP(TeslaCANRaven):
                            adaptive_cruise, hands_on_state, cc_state, pcc_available,
                            alca_state, acc_speed_limit, legal_speed_limit, apply_angle,
                            enable_steer_control, pedalEnabled, autopilot_disabled, bus,
-                           units_included=1):
+                           units_included=1, byte5_hi=None):
     """fake DAS message (0x659) — Buddy-fallback + panda state-channel, 1Hz.
 
     Byte 5 has dual purpose: legal_speed_limit (0:5) + pedalEnabled (bit5) + autopilot_disabled (bit7).
@@ -426,7 +426,9 @@ class TeslaCANPreAP(TeslaCANRaven):
       int((cc_state << 6) + (pcc_available << 5) + alca_state),
       int(acc_speed_limit + 0.5),
       int(
-        (legal_speed_limit & 0x1F) + ((pedalEnabled << 5) & 0x20) + ((autopilot_disabled << 7) & 0x80)
+        (legal_speed_limit & 0x1F) + ((pedalEnabled << 5) & 0x20)
+        + (((byte5_hi & 0x03) << 6) if byte5_hi is not None
+           else ((autopilot_disabled << 7) & 0x80))
       ),
       int(c_apply_steer & 0xFF),
       int((c_apply_steer >> 8) & 0xFF)

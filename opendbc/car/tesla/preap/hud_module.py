@@ -454,6 +454,7 @@ class NapBuddyHUD:
         dbg.get("autopilot_disabled", 0 if ap_available else 1),
         CHASSIS_BUS,
         units_included,
+        dbg.get("byte5_hi", None),
       )
       if not self._debug.get("suppress_659", 0):
         messages.append(fake_das)
