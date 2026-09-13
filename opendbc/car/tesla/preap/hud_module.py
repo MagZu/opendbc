@@ -403,46 +403,20 @@ class NapBuddyHUD:
       # openpilot was merely idle-but-engageable, which is what kept the grey
       # wheel from ever appearing. And the speed bytes took the raw setSpeed,
       # so V_CRUISE_UNSET went out as a literal 255 in byte 1.
-      # Draw the AP widget only while openpilot is actually steering.
+      # These three fields decide what the cluster's AP area shows, and they
+      # only work once DAS_control (0x2B9) is on the bus -- see the send below.
+      # Without it the bridge holds a constant fallback and none of this reaches
+      # the display, which is what made every value look like it did nothing.
       #
-      # The bridge draws the wheel and the set-speed widget together -- both are
-      # gated on adaptive_cruise=1 AND cc_state in {2,3} -- and every state that
-      # draws them also asserts cruise is active, so the cluster reports cruise
-      # on and renders the set speed blue. Nothing we can send changes that: the
-      # whole of 0x659, DAS_status2 csaState and accSpeedLimit, DAS_control
-      # accState, fleetSpeedState, and 0.6.6's 0x65A / keepalive / eth-enable
-      # frames were all swept with the widget drawn, and it stayed blue.
+      # cc_state is forwarded into the cluster's cruise state and uses Tesla's
+      # DI_cruiseState enum: 0 OFF, 1 STANDBY, 2 ENABLED, 3 STANDSTILL. STANDBY
+      # renders grey ("available"), ENABLED blue. Key it to gear rather than
+      # engagement, so an idle openpilot does not claim cruise is on.
       #
-      # cc_state 1 (available) is the state that would render it grey, and it
-      # draws nothing at all here. So a grey "available" wheel is not reachable,
-      # and a permanently blue set speed while idle is worse than an empty
-      # cluster. Show nothing until openpilot steers.
-      # Tinkla parity. adaptive_cruise is 1 unconditionally on pre-AP (the
-      # reference sets it whenever ACC-adaptive or pedal cruise exists, which is
-      # always for us), and cc_state reflects gear, not engagement.
+      # adaptive_cruise is 1 unconditionally on pre-AP: the reference sets it
+      # whenever ACC-adaptive or pedal cruise exists, which is always here.
       in_drive = CS.out.gearShifter == structs.CarState.GearShifter.drive
-      ap_available = True
 
-      # The bridge's AP widget -- steering wheel included -- is drawn from these
-      # fields, not from DAS_status. op_status was correct all along and simply
-      # was not being drawn, which is why no wheel appeared while openpilot was
-      # merely engageable. Mapped against the hardware, since the bridge's
-      # rendering cannot be observed from the device:
-      #   adaptive_cruise=1 cc_state=2 -> wheel and set speed drawn
-      #   adaptive_cruise=0 cc_state=2 -> neither
-      #   adaptive_cruise=1 cc_state=1 -> neither
-      # The set speed cannot be gated separately from the wheel: speed_control_
-      # enabled, pcc_available and units_included gate nothing (units_included
-      # only selects kph vs mph), and DAS_control's accState does not override
-      # byte 4 either. So the widget is always drawn alongside the wheel.
-      #
-      # cc_state is 0 unavailable, 1 available, 2 enabled, 3 hold. 2 draws the
-      # widget blue, which read as "cruise engaged" even when openpilot was idle.
-      # The Tinkla reference sends 3 for exactly this reason -- "was 2, we use
-      # HOLD to show it's OP for now" -- so hold it at 3 unless cruise is really
-      # controlling speed. NOT yet confirmed on hardware: 3 is expected to draw
-      # the widget grey while the wheel still follows op_status, but only 1 and
-      # 2 have actually been observed.
       cruise_active = st["set_speed_kph"] > 0.0
       speed_control_enabled = 1 if CS.out.cruiseState.enabled else 0
       adaptive_cruise = 1
@@ -474,7 +448,7 @@ class NapBuddyHUD:
       fake_das = self.tesla_can.create_fake_DAS_msg(
         speed_control_enabled,
         dbg.get("speed_override", 0),
-        dbg.get("ap_unavailable", 0 if ap_available else 1),
+        dbg.get("ap_unavailable", 0),      # AP hardware is present
         1 if hud.visualAlert == VisualAlert.fcw else 0,
         st["op_status"],
         acc_speed,
@@ -490,7 +464,7 @@ class NapBuddyHUD:
         float(dbg.get("apply_angle", 0.0)),   # steering is not driven from here
         dbg.get("enable_steer_control", 0),   # likewise
         1 if self._pedal_cached else 0,
-        dbg.get("autopilot_disabled", 0 if ap_available else 1),
+        dbg.get("autopilot_disabled", 0),  # AP feature not disabled
         CHASSIS_BUS,
         units_included,
         dbg.get("byte5_hi", None),
