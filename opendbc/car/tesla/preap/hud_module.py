@@ -394,7 +394,11 @@ class NapBuddyHUD:
       # draws nothing at all here. So a grey "available" wheel is not reachable,
       # and a permanently blue set speed while idle is worse than an empty
       # cluster. Show nothing until openpilot steers.
-      ap_available = st["steering"]
+      # Tinkla parity. adaptive_cruise is 1 unconditionally on pre-AP (the
+      # reference sets it whenever ACC-adaptive or pedal cruise exists, which is
+      # always for us), and cc_state reflects gear, not engagement.
+      in_drive = CS.out.gearShifter == structs.CarState.GearShifter.drive
+      ap_available = True
 
       # The bridge's AP widget -- steering wheel included -- is drawn from these
       # fields, not from DAS_status. op_status was correct all along and simply
@@ -417,11 +421,9 @@ class NapBuddyHUD:
       # the widget grey while the wheel still follows op_status, but only 1 and
       # 2 have actually been observed.
       cruise_active = st["set_speed_kph"] > 0.0
-      speed_control_enabled = 1 if cruise_active else 0
-      adaptive_cruise = 1 if ap_available else 0
-      cc_state = 0
-      if ap_available:
-        cc_state = 2 if cruise_active else 3
+      speed_control_enabled = 1 if CS.out.cruiseState.enabled else 0
+      adaptive_cruise = 1
+      cc_state = 2 if st["steering"] else (1 if in_drive else 0)
       # Nothing is drawn while idle, so the readout only matters when steering.
       acc_speed = st["set_speed_kph"]
 
@@ -468,6 +470,22 @@ class NapBuddyHUD:
       )
       if not self._debug.get("suppress_659", 0):
         messages.append(fake_das)
+
+      # DAS_control (0x2B9). The bridge's pipeline stays on a constant fallback
+      # for as long as DAS_accState=0 reaches it, so this has to be sent with
+      # accState=4 whenever the car is in drive. Display-only on pre-AP: there
+      # is no Autopilot ECU to consume it.
+      if not self._debug.get("suppress_2b9", 0):
+        messages.append(self.tesla_can.create_ap1_long_control(
+          in_drive=in_drive,
+          static_cruise=not adaptive_cruise,
+          cruise_enabled=cc_state > 1,
+          set_speed_kph=acc_speed_limit,
+          accel_limits=[-1.4, 1.8],
+          jerk_limits=[-0.46, 0.476],
+          bus=CHASSIS_BUS,
+          counter=1,
+        ))
 
       # Tinkla 0.6.6 companion frame. Opt-in while we establish whether the
       # bridge needs it; 0x65A is not in the panda TX whitelist yet.

@@ -378,6 +378,39 @@ class TeslaCANPreAP(TeslaCANRaven):
     """0x018 — Tinkla 0.6.6 create_enabled_eth_msg: bridge-enabled flag, 5 Hz."""
     return (NAP_BUDDY_ETH_ENABLE_MSG_ID, bytes((status & 0xFF,)), bus)
 
+  def create_ap1_long_control(self, in_drive, static_cruise, cruise_enabled,
+                              set_speed_kph, accel_limits, jerk_limits, bus, counter):
+    """DAS_control (0x2B9) — IC-display variant, Tinkla parity.
+
+    The Buddy's MITM pipeline is gated on DAS_accState: it keeps showing a
+    constant fallback for as long as accState=0 arrives. accState must be 4
+    (ACC_ON) whenever the car is in drive -- NOT gated on openpilot being
+    engaged, which is the mistake that made this frame useless before.
+
+    Pre-AP has no Autopilot ECU to consume this; accel/jerk are limits for an
+    ACC that does not exist on this car. Commands no steering, throttle, brake
+    or gear.
+    """
+    acc_state = 0
+    if in_drive:
+      acc_state = 4
+      if static_cruise and cruise_enabled:
+        acc_state = 3
+    values = {
+      "DAS_setSpeed": max(0, min(set_speed_kph, 200)),
+      "DAS_accState": acc_state,
+      "DAS_aebEvent": 0,
+      "DAS_jerkMin": max(-8., min(jerk_limits[0], 8.)),
+      "DAS_jerkMax": max(-8., min(jerk_limits[1], 8.)),
+      "DAS_accelMin": max(-12., min(accel_limits[0], 3.44)),
+      "DAS_accelMax": max(-12., min(accel_limits[1], 3.44)),
+      "DAS_controlCounter": counter,
+      "DAS_controlChecksum": 0,
+    }
+    data = self.packers[CANBUS.party].make_can_msg("DAS_control", bus, values)[1]
+    values["DAS_controlChecksum"] = self.checksum(0x2B9, data[:7])
+    return self.packers[CANBUS.party].make_can_msg("DAS_control", bus, values)
+
   def create_fake_DAS_msg2(self, hi_lo_beam_status, hi_lo_beam_reason, ahb_enabled,
                            fleet_speed_state, bus):
     """0x65A — Tinkla 0.6.6 Buddy frame (create_fake_DAS_msg2), 3 bytes.
