@@ -18,8 +18,8 @@ carlog.info("nap_conf: _PARAMS_AVAILABLE=%s", _PARAMS_AVAILABLE)
 
 
 CONFIG_FILE = "/data/nap_params.json"
-# Dev-only override for the cluster AP-status encoding; absent in normal use.
-OP_STATUS_DEBUG_FILE = "/data/nap_buddy_op_status_debug"
+# Dev-only display-field overrides; absent in normal use.
+OP_STATUS_DEBUG_FILE = "/data/nap_buddy_debug"
 
 DEFAULT_CONFIG = {
   'double_pull_window_ms': 400,
@@ -209,19 +209,31 @@ class NAPConf:
     self._put_param_bool(NAPParamKeys.BUDDY_IC_INTEGRATION, 'buddy_ic_integration', value)
 
   @property
-  def buddy_ic_op_status_debug(self):
-    """Force DAS_autopilotState to a fixed value. -1 (the default) means no override.
+  def buddy_ic_debug_overrides(self):
+    """Dev-only overrides for the cluster/bridge display fields.
 
-    Dev aid for identifying which encoding this cluster draws the grey wheel on.
-    Deliberately a plain file rather than a param: adding a params key means
-    registering it in params_keys.h and rebuilding, and this is temporary. Write
-    a value 0-15 to OP_STATUS_DEBUG_FILE to force it, remove the file to stop.
+    The bridge's rendering cannot be observed from here, so identifying which
+    field drives a given widget otherwise costs a restart per guess. Write
+    "key=value" lines to OP_STATUS_DEBUG_FILE to force fields live; remove the
+    file to stop. Deliberately a plain file rather than a param: a params key
+    would have to be registered in params_keys.h and rebuilt, and this is
+    temporary. Returns {} in normal use, which overrides nothing.
     """
+    out = {}
     try:
       with open(OP_STATUS_DEBUG_FILE) as f:
-        return max(-1, min(15, int(f.read().strip())))
-    except (OSError, ValueError):
-      return -1
+        for line in f:
+          line = line.strip()
+          if not line or line.startswith("#") or "=" not in line:
+            continue
+          key, _, value = line.partition("=")
+          try:
+            out[key.strip()] = int(value.strip())
+          except ValueError:
+            continue
+    except OSError:
+      pass
+    return out
 
   @property
   def use_pedal(self):

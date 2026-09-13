@@ -74,7 +74,7 @@ class NapBuddyHUD:
     # Toggle is polled, not read every tick. Start False so nothing is emitted
     # before the first read.
     self._enabled_cached = False
-    self._op_status_debug = -1
+    self._debug = {}
     self._pedal_cached = False
     self._toggle_ticks = 0
 
@@ -109,7 +109,7 @@ class NapBuddyHUD:
       self._enabled_cached = nap_conf.buddy_ic_integration
       # Polled here too rather than read per-frame; it only feeds a display bit.
       self._pedal_cached = nap_conf.use_pedal
-      self._op_status_debug = nap_conf.buddy_ic_op_status_debug
+      self._debug = nap_conf.buddy_ic_debug_overrides
     self._toggle_ticks -= 1
     return self._enabled_cached
 
@@ -212,9 +212,8 @@ class NapBuddyHUD:
       op_status = 1
     csa_state = 2 if steering else (1 if engageable else 0)
 
-    # Dev override for identifying the cluster's grey-wheel encoding. -1 = off.
-    if self._op_status_debug >= 0:
-      op_status = self._op_status_debug
+    op_status = self._debug.get("op_status", op_status)
+    csa_state = self._debug.get("csa_state", csa_state)
 
     collision_warning = 1 if hud.visualAlert == VisualAlert.fcw else 0
 
@@ -343,26 +342,39 @@ class NapBuddyHUD:
       # wheel from ever appearing. And the speed bytes took the raw setSpeed,
       # so V_CRUISE_UNSET went out as a literal 255 in byte 1.
       ap_available = st["steering"] or st["engageable"]
-      # Gates the bridge's ACC set-speed widget. Keyed to "is steering" it drew
-      # the widget under autosteer-only with nothing to put in it, which is what
-      # rendered as "0 max" (and as "255 max" before the sentinel was filtered).
-      # Draw it only when there is a real set speed to show.
-      speed_control_enabled = 1 if st["set_speed_kph"] > 0.0 else 0
+
+      # The ACC widget must not be drawn under autosteer-only: there is no set
+      # speed then, and the bridge renders byte 1 regardless -- which is what
+      # showed "255 max" while the V_CRUISE_UNSET sentinel leaked, and "0 max"
+      # once it was filtered. Every field that asserts cruise is doing something
+      # is keyed to having a real set speed, rather than to steering.
+      cruise_active = st["set_speed_kph"] > 0.0
+      speed_control_enabled = 1 if cruise_active else 0
+      adaptive_cruise = 1 if cruise_active else 0
+      cc_state = 2 if cruise_active else (1 if st["engageable"] else 0)
+      acc_speed = st["set_speed_kph"]
+
+      speed_control_enabled = self._debug.get("speed_control_enabled", speed_control_enabled)
+      adaptive_cruise = self._debug.get("adaptive_cruise", adaptive_cruise)
+      cc_state = self._debug.get("cc_state", cc_state)
+      acc_speed = self._debug.get("acc_speed", acc_speed)
+      pcc_available = self._debug.get("pcc_available", 1)
+
       messages.append(self.tesla_can.create_fake_DAS_msg(
         speed_control_enabled,
         0,                            # speed override
         0 if ap_available else 1,     # AP unavailable
         1 if hud.visualAlert == VisualAlert.fcw else 0,
         st["op_status"],
-        st["set_speed_kph"],
+        acc_speed,
         0,                            # turn signal needed
         1 if hud.visualAlert == VisualAlert.fcw else 0,
-        1,                            # adaptive cruise available
+        adaptive_cruise,
         st["hands_on_state"],
-        st["csa_state"],
-        1,                            # pedal available
+        cc_state,
+        pcc_available,
         st["alca_state"],
-        st["set_speed_kph"],
+        acc_speed,
         0,                            # legal speed limit: no map source
         0.0,                          # apply angle: steering is not driven from here
         0,                            # enable steer control: likewise
