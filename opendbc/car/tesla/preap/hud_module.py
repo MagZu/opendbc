@@ -44,11 +44,19 @@ CHASSIS_BUS = 0
 IC_LANE_SCALE = 0.5
 
 # Lane-line probability above which the cluster is told a line exists.
+# Lane-line probability needed to start drawing a line, and the lower level it
+# must fall to before it stops. Real model output sits right on a single
+# threshold for long stretches -- measured 0.44/0.45/0.47/0.51 within a second
+# on a marked road -- which made the cluster's lanes blink on and off. The gap
+# is hysteresis, not a different trip point.
 LANE_LINE_PROB = 0.45
+LANE_LINE_PROB_DROP = 0.35
 LANE_QUALITY_PROB = 0.25
+LANE_QUALITY_PROB_DROP = 0.18
 # modelV2 road-edge standard deviation below which the edge is drawn. The
 # model reports ~0.1-0.5 for a clear edge and grows well past 1 when unsure.
 ROAD_EDGE_STD = 1.0
+ROAD_EDGE_STD_DROP = 1.4
 # Model confidence required before drawing a lead on the cluster. Matches the
 # threshold radard fuses leads at (selfdrive/controls/radard.py).
 LEAD_MODEL_PROB = 0.5
@@ -139,10 +147,20 @@ class NapBuddyHUD:
       return
 
     self.lane_width = float(lanes.laneWidth) or 4.0
-    self.left_line = 1 if float(lanes.leftLaneProb) > LANE_LINE_PROB else 0
-    self.right_line = 1 if float(lanes.rightLaneProb) > LANE_LINE_PROB else 0
-    self.left_quality = 1 if float(lanes.leftEdgeProb) > LANE_QUALITY_PROB else 0
-    self.right_quality = 1 if float(lanes.rightEdgeProb) > LANE_QUALITY_PROB else 0
+
+    def latch(prev, value, on_above, off_below):
+      if prev:
+        return 1 if value > off_below else 0
+      return 1 if value > on_above else 0
+
+    self.left_line = latch(self.left_line, float(lanes.leftLaneProb),
+                           LANE_LINE_PROB, LANE_LINE_PROB_DROP)
+    self.right_line = latch(self.right_line, float(lanes.rightLaneProb),
+                            LANE_LINE_PROB, LANE_LINE_PROB_DROP)
+    self.left_quality = latch(self.left_quality, float(lanes.leftEdgeProb),
+                              LANE_QUALITY_PROB, LANE_QUALITY_PROB_DROP)
+    self.right_quality = latch(self.right_quality, float(lanes.rightEdgeProb),
+                               LANE_QUALITY_PROB, LANE_QUALITY_PROB_DROP)
 
     # Road edges. modelV2 reports a standard deviation, so lower is more
     # confident; the openpilot side sends a large sentinel when it has none.
@@ -150,8 +168,13 @@ class NapBuddyHUD:
     # what an absent capnp field reads as, and a real std is never 0.
     left_std = float(getattr(lanes, "leftRoadEdgeStd", 0.0))
     right_std = float(getattr(lanes, "rightRoadEdgeStd", 0.0))
-    self.left_road_edge = 1 if 0.0 < left_std < ROAD_EDGE_STD else 0
-    self.right_road_edge = 1 if 0.0 < right_std < ROAD_EDGE_STD else 0
+    def edge_latch(prev, std):
+      if std <= 0.0:
+        return 0
+      return 1 if std < (ROAD_EDGE_STD_DROP if prev else ROAD_EDGE_STD) else 0
+
+    self.left_road_edge = edge_latch(self.left_road_edge, left_std)
+    self.right_road_edge = edge_latch(self.right_road_edge, right_std)
 
     # Bounds match what the DAS_lanes signals can represent.
     self.curv = [
