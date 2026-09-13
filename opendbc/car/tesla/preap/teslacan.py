@@ -159,8 +159,15 @@ class TeslaCANPreAP(TeslaCANRaven):
     return self.packers[CANBUS.party].make_can_msg("DAS_bodyControls", bus, values)
 
   def create_lane_message(self, lWidth, rLine, lLine, laneRange, curvC0, curvC1, curvC2, curvC3,
-                          lLane2, rLane2, bus, counter):
-    """DAS_lanes (0x239) — virtual lane geometry for IC path rendering, 10Hz."""
+                          lLane2, rLane2, bus, counter, line_usage=2):
+    """DAS_lanes (0x239) — virtual lane geometry for IC path rendering, 10Hz.
+
+    line_usage is DAS_leftLineUsage/DAS_rightLineUsage: 0 REJECTED_UNAVAILABLE,
+    1 AVAILABLE, 2 FUSED, 3 BLACKLISTED. FUSED means the line is fused into the
+    driving path, which is what draws it as in-use; AVAILABLE means merely
+    detected. Held at 2 unconditionally before, so lanes always drew as in-use
+    even with openpilot disengaged.
+    """
     values = {
       "DAS_leftLaneExists": lLine,
       "DAS_rightLaneExists": rLine,
@@ -170,8 +177,8 @@ class TeslaCANPreAP(TeslaCANRaven):
       "DAS_virtualLaneC1": curvC1,
       "DAS_virtualLaneC2": curvC2,
       "DAS_virtualLaneC3": curvC3,
-      "DAS_leftLineUsage": lLine * 2,
-      "DAS_rightLineUsage": rLine * 2,
+      "DAS_leftLineUsage": line_usage if lLine else 0,
+      "DAS_rightLineUsage": line_usage if rLine else 0,
       "DAS_leftFork": lLane2,
       "DAS_rightFork": rLane2,
       "DAS_lanesCounter": counter,
@@ -202,11 +209,16 @@ class TeslaCANPreAP(TeslaCANRaven):
     }
     return self.packers[CANBUS.party].make_can_msg("DAS_object", bus, values)
 
-  def create_telemetry_road_info(self, lLine, rLine, lLineQualRaw, rLineQualRaw, alcaState, bus):
+  def create_telemetry_road_info(self, lLine, rLine, lLineQualRaw, rLineQualRaw, alcaState, bus,
+                                 lRoadEdge=0, rRoadEdge=0):
     """DAS_telemetry (0x3A9) — road-info marker types/colors/quality, 1Hz.
 
     alcaState: 0=none, 1=alca-left, 2=alca-right.
     Only m0 is built (DAS_telemetryMultiplexer=0).
+
+    Lane type: 0 undecided, 1 solid, 2 road edge, 3 dashed, 4 double,
+    5 botts dots, 6 barrier. lRoadEdge/rRoadEdge draw type 2 on a side with no
+    painted marking, so the cluster shows the road edge instead of nothing.
     """
     rLineType = 1 if rLine == 1 else 7
     rLineColor = 2 if rLine == 1 else 0
@@ -214,12 +226,18 @@ class TeslaCANPreAP(TeslaCANRaven):
     if rLineQualRaw == 1:
       rLineType = 3
       rLineColor = 1
+    elif rLine != 1 and rRoadEdge:
+      rLineType = 2
+      rLineQual = 2
     lLineType = 1 if lLine == 1 else 7
     lLineColor = 2 if lLine == 1 else 0
     lLineQual = 3 if lLine == 1 else 0
     if lLineQualRaw == 1:
       lLineType = 3
       lLineColor = 1
+    elif lLine != 1 and lRoadEdge:
+      lLineType = 2
+      lLineQual = 2
     values = {
       "DAS_telemetryMultiplexer": 0,
       "DAS_telLeftLaneType": lLineType,

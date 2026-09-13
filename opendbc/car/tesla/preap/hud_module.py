@@ -46,6 +46,9 @@ IC_LANE_SCALE = 0.5
 # Lane-line probability above which the cluster is told a line exists.
 LANE_LINE_PROB = 0.45
 LANE_QUALITY_PROB = 0.25
+# modelV2 road-edge standard deviation below which the edge is drawn. The
+# model reports ~0.1-0.5 for a clear edge and grows well past 1 when unsure.
+ROAD_EDGE_STD = 1.0
 
 # How often to re-read the toggle, in ticks of a 100Hz control loop. Reading the
 # params filesystem every tick costs enough to trip "system lagging" on a comma 3.
@@ -70,6 +73,8 @@ class NapBuddyHUD:
     self.tick = 0
     self.warning_ticks = 0
     self.prev_steering = False
+    self.left_road_edge = 0
+    self.right_road_edge = 0
 
     # Toggle is polled, not read every tick. Start False so nothing is emitted
     # before the first read.
@@ -135,6 +140,15 @@ class NapBuddyHUD:
     self.right_line = 1 if float(lanes.rightLaneProb) > LANE_LINE_PROB else 0
     self.left_quality = 1 if float(lanes.leftEdgeProb) > LANE_QUALITY_PROB else 0
     self.right_quality = 1 if float(lanes.rightEdgeProb) > LANE_QUALITY_PROB else 0
+
+    # Road edges. modelV2 reports a standard deviation, so lower is more
+    # confident; the openpilot side sends a large sentinel when it has none.
+    # Exactly 0.0 is treated as "no data", not as perfect confidence: that is
+    # what an absent capnp field reads as, and a real std is never 0.
+    left_std = float(getattr(lanes, "leftRoadEdgeStd", 0.0))
+    right_std = float(getattr(lanes, "rightRoadEdgeStd", 0.0))
+    self.left_road_edge = 1 if 0.0 < left_std < ROAD_EDGE_STD else 0
+    self.right_road_edge = 1 if 0.0 < right_std < ROAD_EDGE_STD else 0
 
     # Bounds match what the DAS_lanes signals can represent.
     self.curv = [
@@ -324,15 +338,20 @@ class NapBuddyHUD:
 
     # --- 10 Hz block -------------------------------------------------------
     if self.tick % 10 == 0:
+      # FUSED while openpilot is steering, so the cluster draws the lines as
+      # in-use; AVAILABLE when they are merely detected.
+      line_usage = 2 if CC.latActive else 1
       messages.append(self.tesla_can.create_lane_message(
         self.lane_width, self.right_line, self.left_line, 50,
         self.curv[0], self.curv[1], self.curv[2], self.curv[3],
         self.left_quality, self.right_quality, CHASSIS_BUS, self.lanes_idx,
+        line_usage,
       ))
       self.lanes_idx = (self.lanes_idx + 1) % 16
       messages.append(self.tesla_can.create_telemetry_road_info(
         self.left_line, self.right_line,
         self.left_quality, self.right_quality, 0, CHASSIS_BUS,
+        self.left_road_edge, self.right_road_edge,
       ))
       messages.append(self._lead_frame(CC_SP))
       st = self._status_frames(CC, CC_SP, CS, messages)

@@ -190,6 +190,8 @@ class NapBuddyLanes:
   c1: float = auto_field()
   c2: float = auto_field()
   c3: float = auto_field()
+  leftRoadEdgeStd: float = auto_field()
+  rightRoadEdgeStd: float = auto_field()
 
 
 @auto_dataclass
