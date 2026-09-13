@@ -343,8 +343,13 @@ class NapBuddyHUD:
       # wheel from ever appearing. And the speed bytes took the raw setSpeed,
       # so V_CRUISE_UNSET went out as a literal 255 in byte 1.
       ap_available = st["steering"] or st["engageable"]
+      # Gates the bridge's ACC set-speed widget. Keyed to "is steering" it drew
+      # the widget under autosteer-only with nothing to put in it, which is what
+      # rendered as "0 max" (and as "255 max" before the sentinel was filtered).
+      # Draw it only when there is a real set speed to show.
+      speed_control_enabled = 1 if st["set_speed_kph"] > 0.0 else 0
       messages.append(self.tesla_can.create_fake_DAS_msg(
-        1 if st["steering"] else 0,   # speed control enabled
+        speed_control_enabled,
         0,                            # speed override
         0 if ap_available else 1,     # AP unavailable
         1 if hud.visualAlert == VisualAlert.fcw else 0,
