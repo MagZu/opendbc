@@ -407,26 +407,29 @@ class NapBuddyHUD:
       pcc_available = self._debug.get("pcc_available", 1)
       units_included = self._debug.get("units_included", 1)
 
+      # Every remaining field is overridable so the bridge's rendering rules can
+      # be mapped without a rebuild per guess; all default to the shipping value.
+      dbg = self._debug
       fake_das = self.tesla_can.create_fake_DAS_msg(
         speed_control_enabled,
-        0,                            # speed override
-        0 if ap_available else 1,     # AP unavailable
+        dbg.get("speed_override", 0),
+        dbg.get("ap_unavailable", 0 if ap_available else 1),
         1 if hud.visualAlert == VisualAlert.fcw else 0,
         st["op_status"],
         acc_speed,
-        0,                            # turn signal needed
+        dbg.get("turn_signal_needed", 0),
         1 if hud.visualAlert == VisualAlert.fcw else 0,
         adaptive_cruise,
-        st["hands_on_state"],
+        dbg.get("hands_on_state", st["hands_on_state"]),
         cc_state,
         pcc_available,
-        st["alca_state"],
+        dbg.get("alca_state", st["alca_state"]),
         acc_speed_limit,
-        0,                            # legal speed limit: no map source
-        0.0,                          # apply angle: steering is not driven from here
-        0,                            # enable steer control: likewise
+        dbg.get("legal_speed_limit", 0),      # no map source
+        float(dbg.get("apply_angle", 0.0)),   # steering is not driven from here
+        dbg.get("enable_steer_control", 0),   # likewise
         1 if self._pedal_cached else 0,
-        0 if ap_available else 1,     # autopilot disabled
+        dbg.get("autopilot_disabled", 0 if ap_available else 1),
         CHASSIS_BUS,
         units_included,
       )
