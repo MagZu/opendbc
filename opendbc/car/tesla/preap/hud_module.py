@@ -270,6 +270,8 @@ class NapBuddyHUD:
       1 if self.speed_limit_kph > 0 else 0,  # DAS_fleetSpeedState
       CHASSIS_BUS,
     ))
+    if "das_status2_speed" in self._debug:
+      set_speed = float(self._debug["das_status2_speed"])
     messages.append(self.tesla_can.create_das_status2(
       csa_state, set_speed, collision_warning, CHASSIS_BUS,
     ))
@@ -283,6 +285,7 @@ class NapBuddyHUD:
       "hands_on_state": hands_on_state,
       "alca_state": alca_state,
       "set_speed_kph": set_speed_kph,
+      "v_ego_kph": max(0.0, float(CS.out.vEgo) * CV.MS_TO_KPH),
       "engageable": engageable,
       "steering": steering,
     }
@@ -343,24 +346,41 @@ class NapBuddyHUD:
       # so V_CRUISE_UNSET went out as a literal 255 in byte 1.
       ap_available = st["steering"] or st["engageable"]
 
-      # The ACC widget must not be drawn under autosteer-only: there is no set
-      # speed then, and the bridge renders byte 1 regardless -- which is what
-      # showed "255 max" while the V_CRUISE_UNSET sentinel leaked, and "0 max"
-      # once it was filtered. Every field that asserts cruise is doing something
-      # is keyed to having a real set speed, rather than to steering.
+      # The bridge draws its whole AP widget -- wheel included -- only when
+      # adaptive_cruise is 1 AND cc_state is 2. Both were previously keyed to
+      # steering or to having a set speed, which is why no wheel ever appeared
+      # while merely engageable. Key them to availability so the grey wheel
+      # shows when openpilot can engage and the blue one when it steers.
+      #
+      # Determined empirically against the bridge, which cannot be observed from
+      # the device: op_status was correct all along and simply was not drawn.
+      #   adaptive_cruise=1 cc_state=2 -> wheel and set speed
+      #   adaptive_cruise=0 cc_state=2 -> neither
+      #   adaptive_cruise=1 cc_state=1 -> neither
+      # The set-speed widget cannot be suppressed separately: speed_control_
+      # enabled, pcc_available and units_included were all tested and gate
+      # nothing (units_included only selects kph vs mph for the value).
       cruise_active = st["set_speed_kph"] > 0.0
       speed_control_enabled = 1 if cruise_active else 0
-      adaptive_cruise = 1 if cruise_active else 0
-      cc_state = 2 if cruise_active else (1 if st["engageable"] else 0)
+      adaptive_cruise = 1 if ap_available else 0
+      cc_state = 2 if ap_available else 0
       acc_speed = st["set_speed_kph"]
 
       speed_control_enabled = self._debug.get("speed_control_enabled", speed_control_enabled)
       adaptive_cruise = self._debug.get("adaptive_cruise", adaptive_cruise)
       cc_state = self._debug.get("cc_state", cc_state)
       acc_speed = self._debug.get("acc_speed", acc_speed)
+      # Byte 4, not byte 1, is what the bridge renders -- byte 1 is ignored. The
+      # two were previously fed the same value, which hid that for several
+      # rounds. Since the widget is drawn whenever the wheel is, give it the
+      # current speed when there is no set speed, as the Tinkla reference does
+      # with v_cruise_pcm, rather than a meaningless 0.
+      acc_speed_limit = st["set_speed_kph"] if cruise_active else st["v_ego_kph"]
+      acc_speed_limit = self._debug.get("acc_speed_limit", acc_speed_limit)
       pcc_available = self._debug.get("pcc_available", 1)
+      units_included = self._debug.get("units_included", 1)
 
-      messages.append(self.tesla_can.create_fake_DAS_msg(
+      fake_das = self.tesla_can.create_fake_DAS_msg(
         speed_control_enabled,
         0,                            # speed override
         0 if ap_available else 1,     # AP unavailable
@@ -374,14 +394,17 @@ class NapBuddyHUD:
         cc_state,
         pcc_available,
         st["alca_state"],
-        acc_speed,
+        acc_speed_limit,
         0,                            # legal speed limit: no map source
         0.0,                          # apply angle: steering is not driven from here
         0,                            # enable steer control: likewise
         1 if self._pedal_cached else 0,
         0 if ap_available else 1,     # autopilot disabled
         CHASSIS_BUS,
-      ))
+        units_included,
+      )
+      if not self._debug.get("suppress_659", 0):
+        messages.append(fake_das)
 
     # --- 1 Hz block --------------------------------------------------------
     # DAS_bodyControls (0x3E9) is deliberately NOT sent here. PreAPCarController

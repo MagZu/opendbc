@@ -347,13 +347,13 @@ class TeslaCANPreAP(TeslaCANRaven):
                            turn_signal_needed, forward_collission_warning,
                            adaptive_cruise, hands_on_state, cc_state, pcc_available,
                            alca_state, acc_speed_limit, legal_speed_limit, apply_angle,
-                           enable_steer_control, pedalEnabled, autopilot_disabled, bus):
+                           enable_steer_control, pedalEnabled, autopilot_disabled, bus,
+                           units_included=1):
     """fake DAS message (0x659) — Buddy-fallback + panda state-channel, 1Hz.
 
     Byte 5 has dual purpose: legal_speed_limit (0:5) + pedalEnabled (bit5) + autopilot_disabled (bit7).
     Sent regardless of the IC-integration toggle, matching the original behaviour.
     """
-    units_included = 1
     c_apply_steer = int(
       ((int(apply_angle * 10 + 0x4000)) & 0x7FFF) + (enable_steer_control << 15)
     )
