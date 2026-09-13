@@ -346,24 +346,32 @@ class NapBuddyHUD:
       # so V_CRUISE_UNSET went out as a literal 255 in byte 1.
       ap_available = st["steering"] or st["engageable"]
 
-      # The bridge draws its whole AP widget -- wheel included -- only when
-      # adaptive_cruise is 1 AND cc_state is 2. Both were previously keyed to
-      # steering or to having a set speed, which is why no wheel ever appeared
-      # while merely engageable. Key them to availability so the grey wheel
-      # shows when openpilot can engage and the blue one when it steers.
-      #
-      # Determined empirically against the bridge, which cannot be observed from
-      # the device: op_status was correct all along and simply was not drawn.
-      #   adaptive_cruise=1 cc_state=2 -> wheel and set speed
+      # The bridge's AP widget -- steering wheel included -- is drawn from these
+      # fields, not from DAS_status. op_status was correct all along and simply
+      # was not being drawn, which is why no wheel appeared while openpilot was
+      # merely engageable. Mapped against the hardware, since the bridge's
+      # rendering cannot be observed from the device:
+      #   adaptive_cruise=1 cc_state=2 -> wheel and set speed drawn
       #   adaptive_cruise=0 cc_state=2 -> neither
       #   adaptive_cruise=1 cc_state=1 -> neither
-      # The set-speed widget cannot be suppressed separately: speed_control_
-      # enabled, pcc_available and units_included were all tested and gate
-      # nothing (units_included only selects kph vs mph for the value).
+      # The set speed cannot be gated separately from the wheel: speed_control_
+      # enabled, pcc_available and units_included gate nothing (units_included
+      # only selects kph vs mph), and DAS_control's accState does not override
+      # byte 4 either. So the widget is always drawn alongside the wheel.
+      #
+      # cc_state is 0 unavailable, 1 available, 2 enabled, 3 hold. 2 draws the
+      # widget blue, which read as "cruise engaged" even when openpilot was idle.
+      # The Tinkla reference sends 3 for exactly this reason -- "was 2, we use
+      # HOLD to show it's OP for now" -- so hold it at 3 unless cruise is really
+      # controlling speed. NOT yet confirmed on hardware: 3 is expected to draw
+      # the widget grey while the wheel still follows op_status, but only 1 and
+      # 2 have actually been observed.
       cruise_active = st["set_speed_kph"] > 0.0
       speed_control_enabled = 1 if cruise_active else 0
       adaptive_cruise = 1 if ap_available else 0
-      cc_state = 2 if ap_available else 0
+      cc_state = 0
+      if ap_available:
+        cc_state = 2 if cruise_active else 3
       acc_speed = st["set_speed_kph"]
 
       speed_control_enabled = self._debug.get("speed_control_enabled", speed_control_enabled)
