@@ -234,7 +234,7 @@ class NapBuddyHUD:
     # overstates the number by 1.6x. The DBC calls raw 0 "NONE", but the cluster
     # renders that as a bogus max readout instead of hiding the field, so send
     # the documented SNA whenever there is no set speed to show.
-    set_speed = DAS_ACC_SPEED_SNA
+    set_speed_kph = 0.0
     if CS.out.cruiseState.enabled:
       v_kph = max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH)
       # openpilot parks hudControl.setSpeed at V_CRUISE_UNSET (255 kph) when no
@@ -243,7 +243,8 @@ class NapBuddyHUD:
       # which also keeps the readout off under autosteer-only, where the pre-AP
       # spoofer reports cruiseState.enabled with no set speed.
       if 0.0 < v_kph < V_CRUISE_UNSET_KPH:
-        set_speed = v_kph * CV.KPH_TO_MPH
+        set_speed_kph = v_kph
+    set_speed = set_speed_kph * CV.KPH_TO_MPH if set_speed_kph > 0.0 else DAS_ACC_SPEED_SNA
 
     # DAS_alca_state, from lane availability:
     #   1 unavailable (no lanes)  6 left only  7 right only  8 both
@@ -273,6 +274,19 @@ class NapBuddyHUD:
     messages.append(self.tesla_can.create_das_status2(
       csa_state, set_speed, collision_warning, CHASSIS_BUS,
     ))
+
+    # Handed back so the 0x659 bridge frame renders from the same state rather
+    # than recomputing its own, which is how it ended up disagreeing with the
+    # cluster frames about both availability and the set speed.
+    return {
+      "op_status": op_status,
+      "csa_state": csa_state,
+      "hands_on_state": hands_on_state,
+      "alca_state": alca_state,
+      "set_speed_kph": set_speed_kph,
+      "engageable": engageable,
+      "steering": steering,
+    }
 
   def update(self, CC, CC_SP, CS):
     """Build this tick's IC frames.
@@ -319,29 +333,36 @@ class NapBuddyHUD:
         self.left_quality, self.right_quality, 0, CHASSIS_BUS,
       ))
       messages.append(self._lead_frame(CC_SP))
-      self._status_frames(CC, CC_SP, CS, messages)
+      st = self._status_frames(CC, CC_SP, CS, messages)
 
-      # NAP Buddy status frame. Carries display state for the bridge.
+      # NAP Buddy status frame. This is what the bridge renders from, so it has
+      # to agree with the cluster frames -- it previously recomputed its own
+      # state and disagreed on both counts. apUnavailable/autopilot_disabled
+      # were keyed to "is steering", so they claimed AP was unavailable whenever
+      # openpilot was merely idle-but-engageable, which is what kept the grey
+      # wheel from ever appearing. And the speed bytes took the raw setSpeed,
+      # so V_CRUISE_UNSET went out as a literal 255 in byte 1.
+      ap_available = st["steering"] or st["engageable"]
       messages.append(self.tesla_can.create_fake_DAS_msg(
-        1 if steering else 0,  # speed control enabled
-        0,                     # speed override
-        0 if steering else 1,  # AP unavailable
+        1 if st["steering"] else 0,   # speed control enabled
+        0,                            # speed override
+        0 if ap_available else 1,     # AP unavailable
         1 if hud.visualAlert == VisualAlert.fcw else 0,
-        5 if steering else 2,  # op status
-        max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH),
-        0,                     # turn signal needed
+        st["op_status"],
+        st["set_speed_kph"],
+        0,                            # turn signal needed
         1 if hud.visualAlert == VisualAlert.fcw else 0,
-        1,                     # adaptive cruise available
-        0,                     # hands on state
-        2 if steering else 0,  # cc state
-        1,                     # pedal available
-        1,                     # alca state: unavailable
-        max(0.0, float(hud.setSpeed) * CV.MS_TO_KPH),
-        0,                     # legal speed limit: no map source
-        0.0,                   # apply angle: steering is not driven from here
-        0,                     # enable steer control: likewise
+        1,                            # adaptive cruise available
+        st["hands_on_state"],
+        st["csa_state"],
+        1,                            # pedal available
+        st["alca_state"],
+        st["set_speed_kph"],
+        0,                            # legal speed limit: no map source
+        0.0,                          # apply angle: steering is not driven from here
+        0,                            # enable steer control: likewise
         1 if self._pedal_cached else 0,
-        0 if steering else 1,
+        0 if ap_available else 1,     # autopilot disabled
         CHASSIS_BUS,
       ))
 
