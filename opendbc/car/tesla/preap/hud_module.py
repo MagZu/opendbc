@@ -49,6 +49,9 @@ LANE_QUALITY_PROB = 0.25
 # modelV2 road-edge standard deviation below which the edge is drawn. The
 # model reports ~0.1-0.5 for a clear edge and grows well past 1 when unsure.
 ROAD_EDGE_STD = 1.0
+# Model confidence required before drawing a lead on the cluster. Matches the
+# threshold radard fuses leads at (selfdrive/controls/radard.py).
+LEAD_MODEL_PROB = 0.5
 
 # How often to re-read the toggle, in ticks of a 100Hz control loop. Reading the
 # params filesystem every tick costs enough to trip "system lagging" on a comma 3.
@@ -183,7 +186,14 @@ class NapBuddyHUD:
     c0 = self.curv[0]
 
     def unpack(lead, lead_id):
+      # status alone is radarState.present, which is true for a bare radar
+      # track. The Tesla radar readily returns close stationary objects -- a
+      # garage door or the car in front while parked -- and drawing those put a
+      # phantom vehicle on the cluster with nothing ahead. Require the model to
+      # confirm the lead as well, at the same probability radard fuses on.
       if lead is None or not getattr(lead, "status", False):
+        return 0, 0, 0.0, 0.0, 0
+      if float(getattr(lead, "modelProb", 0.0)) <= LEAD_MODEL_PROB:
         return 0, 0, 0.0, 0.0, 0
       return (
         2,                                                   # vehicle class
