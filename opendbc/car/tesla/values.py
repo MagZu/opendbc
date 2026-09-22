@@ -45,6 +45,13 @@ class TeslaPlatformConfig(PlatformConfig):
   dbc_dict: DbcDict = field(default_factory=lambda: {Bus.party: 'tesla_model3_party', Bus.adas: 'tesla_model3_vehicle'})
 
 
+# Model S centre of mass as a fraction of wheelbase back from the front axle.
+# Rear-wheel-drive cars sit further rearward than the later dual-motor ones.
+# Pre-AP is RWD by definition: dual motor arrived 2014-10-09, the same date as
+# AP1 hardware, so no Pre-AP car has it.
+MODEL_S_CENTER_TO_FRONT_RWD = 0.54
+
+
 class CAR(Platforms):
   TESLA_MODEL_3 = TeslaPlatformConfig(
     [
@@ -69,7 +76,8 @@ class CAR(Platforms):
   )
   TESLA_MODEL_S_PREAP = TeslaPlatformConfig(
     [CarDocs("Tesla Model S (Pre-AP) 2012-14", "All", car_parts=CarParts.common([CarHarness.tesla_model_s_hw1]))],
-    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
+    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0,
+             centerToFrontRatio=MODEL_S_CENTER_TO_FRONT_RWD),
     {
       Bus.chassis: 'tesla_preap',
       Bus.party: 'tesla_preap',
